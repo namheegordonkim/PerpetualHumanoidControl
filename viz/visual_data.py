@@ -105,44 +105,44 @@ class VisualDataContainer:
             body_lines = scene.visuals.Line(parent=view.scene)
             self.body_lines.append(body_lines)
 
-            shadow_markers = scene.visuals.Markers(
-                parent=view.scene,
-                size=0.1,
-                edge_width=0.01,
-                scaling=True,
-            )
+            # shadow_markers = scene.visuals.Markers(
+            #     parent=view.scene,
+            #     size=0.1,
+            #     edge_width=0.01,
+            #     scaling=True,
+            # )
             # shadow_markers.set_gl_state(depth_test=False)
-            self.shadow_markers.append(shadow_markers)
+            # self.shadow_markers.append(shadow_markers)
 
-        # for i in range(22):
-        #     shadow_ellipse = scene.visuals.Ellipse(
-        #         center=np.array([0, 0, 0]),
-        #         radius=(0.1, 0.1),
-        #         color=(0, 0, 0, 0.5),
-        #         parent=plane,
-        #         num_segments=12,
-        #     )
-        #     self.shadow_ellipses.append(shadow_ellipse)
-        #     shadow_ellipse.set_gl_state(depth_test=False)
+        for i in range(3):
+            shadow_ellipse = scene.visuals.Ellipse(
+                center=np.array([0, 0, 0]),
+                radius=(0.1, 0.1),
+                color=(0, 0, 0, 0.5),
+                parent=plane,
+                num_segments=12,
+            )
+            self.shadow_ellipses.append(shadow_ellipse)
+            shadow_ellipse.set_gl_state(depth_test=False)
 
         # Render order
-        i = 0
-        # for ax in self.sparse_axes:
-        #     ax.order = i
-        # i += 1
-        self.body_markers[2].order = i
-        i += 1
-        self.body_markers[1].order = i
-        i += 1
-        self.body_markers[0].order = i
-        i += 1
-        plane.order = i
-        # i += 1
-        # self.shadow_markers[2].order = i
+        # i = 0
+        # # for ax in self.sparse_axes:
+        # #     ax.order = i
         # # i += 1
-        # self.shadow_markers[1].order = i
+        # self.body_markers[2].order = i
         # i += 1
-        # self.shadow_markers[0].order = i
-        # for shadow_ellipse in self.shadow_ellipses:
-        #     shadow_ellipse.order = 1
+        # self.body_markers[1].order = i
+        # i += 1
+        # self.body_markers[0].order = i
+        # i += 1
+        # plane.order = i
+        # # i += 1
+        # # self.shadow_markers[2].order = i
+        # # # i += 1
+        # # self.shadow_markers[1].order = i
+        # # i += 1
+        # # self.shadow_markers[0].order = i
+        # # for shadow_ellipse in self.shadow_ellipses:
+        # #     shadow_ellipse.order = 1
 

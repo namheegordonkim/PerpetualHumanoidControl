@@ -37,8 +37,8 @@ def main(args, remaining_args):
     filepath = f"{proj_dir}/data/theirs/their_vr_input.pkl"
     d = torch.load(filepath, map_location="cpu")
     frames = torch.cat([d["ref_rb_pos_subset"], d["ref_rb_rot_subset"]], dim=-1)
-    frames_np = np.array(frames[0])
-    frames_np[..., [3, 4, 5, 6]] = frames_np[..., [4, 5, 6, 3]]
+    frames_np = np.array(frames)
+    # frames_np[..., [3, 4, 5, 6]] = frames_np[..., [4, 5, 6, 3]]
 
     # For Tensorboard logging
     writer = SummaryWriter(log_dir=f"{proj_dir}/logdir/{args.run_name}/{args.out_name}")
@@ -84,22 +84,46 @@ def main(args, remaining_args):
         visual_data.body_markers[0].set_data(
             # pos=node_positions[t, [6, 11]],
             pos=xyzs,
-            face_color=(1, 0, 0, 0.5),
+            face_color=(1, 0, 0, 1),
             edge_color=(0, 0, 0, 0),
             size=0.2,
             edge_width=0,
         )
+        for i in range(3):
+            visual_data.shadow_ellipses[i].center = xyzs[i, 0], xyzs[i, 1]
 
-        # quats[..., [0, 1, 2, 3]] = quats[..., [0, 2, 1, 3]]
-        # quats[..., 1] *= -1
-        # quats[..., :-1] *= -1
+        # What did I just do:
+        # I noticed that the red axis is pointing the opposite way
+        # This means z axis rotation should be mirrored, but in quaternion it's even simpler
+        # All I did is flip the red axis
+        # So in general when I notice that an axis is pointing the opposite, I just "mirror" that particular axis, not axis of rotation
+        quats[..., 0] *= -1
+        quats[..., :-1] *= -1
+
+        # For left hand, I notice that the axis of rotation should be green, not blue
+        quats[1, [0, 1, 2, 3]] = quats[1, [0, 2, 1, 3]]
+        quats[1, :-1] *= -1
+
+        # For right hand, same thing
+        quats[2, [0, 1, 2, 3]] = quats[2, [0, 2, 1, 3]]
+        quats[2, :-1] *= -1
+        # Then I notice the red guy moving opposite
+        quats[2, 0] *= 0
+        quats[2, :-1] *= -1
+
+        # For hands, the green and blue axes should be swapped
+        # quats[1, [0, 1, 2, 3]] = quats[1, [0, 2, 1, 3]]
+        # quats[1, :-1] *= -1
+        # quats[2, [0, 1, 2, 3]] = quats[2, [0, 2, 1, 3]]
+        # quats[2, :-1] *= -1
 
         node_rotmats = Rotation.from_quat(quats).as_matrix()
-        # node_rotmats[..., [0, 1, 2]] = node_rotmats[..., [0, 2, 1]]
+        node_rotmats[1, [0, 1, 2]] = node_rotmats[1, [0, 2, 1]]
+        node_rotmats[2, [0, 1, 2]] = node_rotmats[2, [0, 2, 1]]
         # node_rotmats[..., 1] *= -1
 
-        # correction = Rotation.from_euler("XYZ", [0, 0, 0]).as_matrix()
-        correction = Rotation.from_euler("XYZ", [np.pi / 2, 0, 0]).as_matrix()
+        correction = Rotation.from_euler("XYZ", [0, 0, 0]).as_matrix()
+        # correction = Rotation.from_euler("XYZ", [np.pi / 2, 0, 0]).as_matrix()
 
         visual_data.sparse_axes[0].transform.reset()
         visual_data.sparse_axes[1].transform.reset()

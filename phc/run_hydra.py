@@ -424,6 +424,6 @@ if __name__ == "__main__":
     import pydevd_pycharm
 
     pydevd_pycharm.settrace(
-        "localhost", port=12347, stdoutToServer=True, stderrToServer=True, suspend=False
+        "localhost", port=12346, stdoutToServer=True, stderrToServer=True, suspend=False
     )
     main()

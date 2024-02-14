@@ -456,6 +456,7 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
             self._motion_lib = motion_lib
 
             load_motions_kwargs = torch.load("data/theirs/load_motions_kwargs.pkl")
+            load_motions_kwargs["start_idx"] = 4
             self._motion_lib.load_motions(**load_motions_kwargs)
 
         else:
@@ -1202,22 +1203,26 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
                     time_steps,
                     self._has_upright_start,
                 )
-                if os.path.exists("their_vr_input.pkl"):
-                    their_vr_input = torch.load("their_vr_input.pkl")
-                else:
-                    their_vr_input = {
-                        "ref_rb_pos_subset": ref_rb_pos_subset[:, None],
-                        "ref_rb_rot_subset": ref_rb_rot_subset[:, None],
-                        "ref_body_vel_subset": ref_body_vel_subset[:, None],
-                        "ref_body_ang_vel_subset": ref_body_ang_vel_subset[:, None],
+                # if os.path.exists("their_vr_input.pkl"):
+                #     their_vr_input = torch.load("their_vr_input.pkl")
+                # else:
+                t = self.progress_buf[0].item()
+                if t == 0:
+                    self.their_vr_input = {
+                        "ref_rb_pos_subset": torch.zeros(self._motion_lib.gts.shape[0], *ref_rb_pos_subset.shape[1:]),
+                        "ref_rb_rot_subset": torch.zeros(self._motion_lib.gts.shape[0], *ref_rb_rot_subset.shape[1:]),
+                        "ref_body_vel_subset": torch.zeros(self._motion_lib.gts.shape[0], *ref_body_vel_subset.shape[1:]),
+                        "ref_body_ang_vel_subset": torch.zeros(self._motion_lib.gts.shape[0], *ref_body_ang_vel_subset.shape[1:]),
                     }
+                self.their_vr_input["ref_rb_pos_subset"][t] = ref_rb_pos_subset[0]
+                self.their_vr_input["ref_rb_rot_subset"][t] = ref_rb_rot_subset[0]
+                self.their_vr_input["ref_body_vel_subset"][t] = ref_body_vel_subset[0]
+                self.their_vr_input["ref_body_ang_vel_subset"][t] = ref_body_ang_vel_subset[0]
+                print(t)
 
-                their_vr_input["ref_rb_pos_subset"] = torch.cat([their_vr_input["ref_rb_pos_subset"], ref_rb_pos_subset[:, None]], dim=1)
-                their_vr_input["ref_rb_rot_subset"] = torch.cat([their_vr_input["ref_rb_rot_subset"], ref_rb_rot_subset[:, None]], dim=1)
-                their_vr_input["ref_body_vel_subset"] = torch.cat([their_vr_input["ref_body_vel_subset"], ref_body_vel_subset[:, None]], dim=1)
-                their_vr_input["ref_body_ang_vel_subset"] = torch.cat([their_vr_input["ref_body_ang_vel_subset"], ref_body_ang_vel_subset[:, None]], dim=1)
-
-                torch.save(their_vr_input, "their_vr_input.pkl")
+                if t >= self._motion_lib.gts.shape[0] - 1:
+                    torch.save(self.their_vr_input, "their_vr_input.pkl")
+                    raise RuntimeError
 
                 # obs[:, -1] = env_ids.clone().float(); print('debugging')
                 # obs[:, -2] = self.progress_buf[env_ids].clone().float(); print('debugging')
