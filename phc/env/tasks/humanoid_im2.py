@@ -35,7 +35,7 @@ import copy
 from typing import OrderedDict
 
 
-class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
+class HumanoidIm2(humanoid_amp_task.HumanoidAMPTask):
 
     def __init__(
         self, cfg, sim_params, physics_engine, device_type, device_id, headless
@@ -966,29 +966,13 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
         self_obs = self._compute_humanoid_obs(env_ids)
         self.self_obs_buf[env_ids] = self_obs
 
-        if self._enable_task_obs:
-            task_obs = self._compute_task_obs(env_ids)
-            obs = torch.cat([self_obs, task_obs], dim=-1)
-        else:
-            obs = self_obs
+        task_obs = self._compute_task_obs(env_ids)
+        obs = torch.cat([self_obs, task_obs], dim=-1)
 
         if self.add_obs_noise and not flags.test:
             obs = obs + torch.randn_like(obs) * 0.1
 
-        if self.obs_v == 4:
-            # Double sub will return a copy.
-            B, N = obs.shape
-            sums = self.obs_buf[env_ids, 0 : self.past_track_steps].abs().sum(dim=1)
-            zeros = sums == 0
-            nonzero = ~zeros
-            obs_slice = self.obs_buf[env_ids]
-            obs_slice[zeros] = torch.tile(obs[zeros], (1, self.past_track_steps))
-            obs_slice[nonzero] = torch.cat(
-                [obs_slice[nonzero, N:], obs[nonzero]], dim=-1
-            )
-            self.obs_buf[env_ids] = obs_slice
-        else:
-            self.obs_buf[env_ids] = obs
+        self.obs_buf[env_ids] = obs
         return obs
 
     def _compute_task_obs(self, env_ids=None, save_buffer=True):
@@ -1085,244 +1069,67 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
         ref_body_vel_subset = ref_body_vel[..., self._track_bodies_id, :]
         ref_body_ang_vel_subset = ref_body_ang_vel[..., self._track_bodies_id, :]
 
-        if self.obs_v == 1:
-            obs = compute_imitation_observations(
+        if self.zero_out_far:
+            close_distance = self.close_distance
+            distance = torch.norm(root_pos - ref_rb_pos_subset[..., 0, :], dim=-1)
+
+            zeros_subset = distance > close_distance
+            ref_rb_pos_subset[zeros_subset, 1:] = body_pos_subset[zeros_subset, 1:]
+            ref_rb_rot_subset[zeros_subset, 1:] = body_rot_subset[zeros_subset, 1:]
+            ref_body_vel_subset[zeros_subset, :] = body_vel_subset[zeros_subset, :]
+            ref_body_ang_vel_subset[zeros_subset, :] = body_ang_vel_subset[
+                zeros_subset, :
+            ]
+            self._point_goal[env_ids] = distance
+
+            far_distance = (
+                self.far_distance
+            )  # does not seem to need this in particular...
+            vector_zero_subset = (
+                distance > far_distance
+            )  # > 5 meters, it become just a direction
+            ref_rb_pos_subset[vector_zero_subset, 0] = (
+                (
+                    ref_rb_pos_subset[vector_zero_subset, 0]
+                    - body_pos_subset[vector_zero_subset, 0]
+                )
+                / distance[vector_zero_subset, None]
+                * far_distance
+            ) + body_pos_subset[vector_zero_subset, 0]
+
+        if self._occl_training:
+            # ranomly occlude some of the body parts
+            random_occlu_idx = self.random_occlu_idx[env_ids]
+            ref_rb_pos_subset[random_occlu_idx] = body_pos_subset[random_occlu_idx]
+            ref_rb_rot_subset[random_occlu_idx] = body_rot_subset[random_occlu_idx]
+            ref_body_vel_subset[random_occlu_idx] = body_vel_subset[random_occlu_idx]
+            ref_body_ang_vel_subset[random_occlu_idx] = body_ang_vel_subset[
+                random_occlu_idx
+            ]
+
+        if self.obs_v == 4 or self.obs_v == 6:
+            obs = compute_imitation_observations_v6(
                 root_pos,
                 root_rot,
                 body_pos_subset,
                 body_rot_subset,
                 body_vel_subset,
                 body_ang_vel_subset,
-                ref_rb_pos_subset,
-                ref_rb_rot_subset,
-                ref_body_vel_subset,
-                ref_body_ang_vel_subset,
+                self.ref_rb_pos_subset,
+                self.ref_rb_rot_subset,
+                self.ref_body_vel_subset,
+                self.ref_body_ang_vel_subset,
                 time_steps,
                 self._has_upright_start,
             )
 
-        elif self.obs_v == 2:
-            ref_dof_pos_subset = ref_dof_pos.reshape(-1, len(self._dof_names), 3)[
-                ..., self._track_bodies_id[1:] - 1, :
-            ]  # Remove root from dof dim
-            dof_pos_subset = self._dof_pos[env_ids].reshape(
-                -1, len(self._dof_names), 3
-            )[..., self._track_bodies_id[1:] - 1, :]
-            obs = compute_imitation_observations_v2(
-                root_pos,
-                root_rot,
-                body_pos_subset,
-                body_rot_subset,
-                body_vel_subset,
-                body_ang_vel_subset,
-                dof_pos_subset,
-                ref_rb_pos_subset,
-                ref_rb_rot_subset,
-                ref_body_vel_subset,
-                ref_body_ang_vel_subset,
-                ref_dof_pos_subset,
-                time_steps,
-                self._has_upright_start,
-            )
-        elif self.obs_v == 3:
-            obs = compute_imitation_observations_v3(
-                root_pos,
-                root_rot,
-                body_pos_subset,
-                body_rot_subset,
-                body_vel_subset,
-                body_ang_vel_subset,
-                ref_rb_pos_subset,
-                ref_rb_rot_subset,
-                ref_body_vel_subset,
-                ref_body_ang_vel_subset,
-                time_steps,
-                self._has_upright_start,
-            )
-        elif (
-            self.obs_v == 4
-            or self.obs_v == 5
-            or self.obs_v == 6
-            or self.obs_v == 8
-            or self.obs_v == 9
-        ):
-
-            if self.zero_out_far:
-                close_distance = self.close_distance
-                distance = torch.norm(root_pos - ref_rb_pos_subset[..., 0, :], dim=-1)
-
-                zeros_subset = distance > close_distance
-                ref_rb_pos_subset[zeros_subset, 1:] = body_pos_subset[zeros_subset, 1:]
-                ref_rb_rot_subset[zeros_subset, 1:] = body_rot_subset[zeros_subset, 1:]
-                ref_body_vel_subset[zeros_subset, :] = body_vel_subset[zeros_subset, :]
-                ref_body_ang_vel_subset[zeros_subset, :] = body_ang_vel_subset[
-                    zeros_subset, :
-                ]
-                self._point_goal[env_ids] = distance
-
-                far_distance = (
-                    self.far_distance
-                )  # does not seem to need this in particular...
-                vector_zero_subset = (
-                    distance > far_distance
-                )  # > 5 meters, it become just a direction
-                ref_rb_pos_subset[vector_zero_subset, 0] = (
-                    (
-                        ref_rb_pos_subset[vector_zero_subset, 0]
-                        - body_pos_subset[vector_zero_subset, 0]
-                    )
-                    / distance[vector_zero_subset, None]
-                    * far_distance
-                ) + body_pos_subset[vector_zero_subset, 0]
-
-            if self._occl_training:
-                # ranomly occlude some of the body parts
-                random_occlu_idx = self.random_occlu_idx[env_ids]
-                ref_rb_pos_subset[random_occlu_idx] = body_pos_subset[random_occlu_idx]
-                ref_rb_rot_subset[random_occlu_idx] = body_rot_subset[random_occlu_idx]
-                ref_body_vel_subset[random_occlu_idx] = body_vel_subset[
-                    random_occlu_idx
-                ]
-                ref_body_ang_vel_subset[random_occlu_idx] = body_ang_vel_subset[
-                    random_occlu_idx
-                ]
-
-            if self.obs_v == 4 or self.obs_v == 6:
-                obs = compute_imitation_observations_v6(
-                    root_pos,
-                    root_rot,
-                    body_pos_subset,
-                    body_rot_subset,
-                    body_vel_subset,
-                    body_ang_vel_subset,
-                    ref_rb_pos_subset,
-                    ref_rb_rot_subset,
-                    ref_body_vel_subset,
-                    ref_body_ang_vel_subset,
-                    time_steps,
-                    self._has_upright_start,
-                )
-                if os.path.exists("their_vr_input.pkl"):
-                    their_vr_input = torch.load("their_vr_input.pkl")
-                else:
-                    their_vr_input = {
-                        "ref_rb_pos_subset": ref_rb_pos_subset[:, None],
-                        "ref_rb_rot_subset": ref_rb_rot_subset[:, None],
-                        "ref_body_vel_subset": ref_body_vel_subset[:, None],
-                        "ref_body_ang_vel_subset": ref_body_ang_vel_subset[:, None],
-                    }
-
-                their_vr_input["ref_rb_pos_subset"] = torch.cat([their_vr_input["ref_rb_pos_subset"], ref_rb_pos_subset[:, None]], dim=1)
-                their_vr_input["ref_rb_rot_subset"] = torch.cat([their_vr_input["ref_rb_rot_subset"], ref_rb_rot_subset[:, None]], dim=1)
-                their_vr_input["ref_body_vel_subset"] = torch.cat([their_vr_input["ref_body_vel_subset"], ref_body_vel_subset[:, None]], dim=1)
-                their_vr_input["ref_body_ang_vel_subset"] = torch.cat([their_vr_input["ref_body_ang_vel_subset"], ref_body_ang_vel_subset[:, None]], dim=1)
-
-                torch.save(their_vr_input, "their_vr_input.pkl")
-
-                # obs[:, -1] = env_ids.clone().float(); print('debugging')
-                # obs[:, -2] = self.progress_buf[env_ids].clone().float(); print('debugging')
-
-            elif self.obs_v == 5:
-                obs = compute_imitation_observations_v6(
-                    root_pos,
-                    root_rot,
-                    body_pos_subset,
-                    body_rot_subset,
-                    body_vel_subset,
-                    body_ang_vel_subset,
-                    ref_rb_pos_subset,
-                    ref_rb_rot_subset,
-                    ref_body_vel_subset,
-                    ref_body_ang_vel_subset,
-                    time_steps,
-                    self._has_upright_start,
-                )
-                one_hots = self._motion_lib.one_hot_motions[env_ids]
-                obs = torch.cat([obs, one_hots], dim=-1)
-
-            elif self.obs_v == 8:
-                obs = compute_imitation_observations_v8(
-                    root_pos,
-                    root_rot,
-                    body_pos_subset,
-                    body_rot_subset,
-                    body_vel_subset,
-                    body_ang_vel_subset,
-                    ref_rb_pos_subset,
-                    ref_rb_rot_subset,
-                    ref_body_vel_subset,
-                    ref_body_ang_vel_subset,
-                    time_steps,
-                    self._has_upright_start,
-                )
-            elif self.obs_v == 9:
-                ref_root_vel_subset = ref_body_vel_subset[:, 0]
-                ref_root_ang_vel_subset = ref_body_ang_vel_subset[:, 0]
-                obs = compute_imitation_observations_v9(
-                    root_pos,
-                    root_rot,
-                    body_pos_subset,
-                    body_rot_subset,
-                    body_vel_subset,
-                    body_ang_vel_subset,
-                    ref_rb_pos_subset,
-                    ref_rb_rot_subset,
-                    ref_root_vel_subset,
-                    ref_root_ang_vel_subset,
-                    time_steps,
-                    self._has_upright_start,
-                )
-
-            if self._fut_tracks_dropout and not flags.test:
-                dropout_rate = 0.1
-                curr_num_envs = env_ids.shape[0]
-                obs = obs.view(curr_num_envs, self._num_traj_samples, -1)
-                mask = torch.rand(curr_num_envs, self._num_traj_samples) < dropout_rate
-                obs[mask, :] = 0
-                obs = obs.view(curr_num_envs, -1)
-
-        elif self.obs_v == 7:
-
-            if self.zero_out_far:
-                close_distance = self.close_distance
-                distance = torch.norm(root_pos - ref_rb_pos_subset[..., 0, :], dim=-1)
-
-                zeros_subset = distance > close_distance
-                ref_rb_pos_subset[zeros_subset, 1:] = body_pos_subset[zeros_subset, 1:]
-                ref_body_vel_subset[zeros_subset, :] = body_vel_subset[zeros_subset, :]
-                self._point_goal[env_ids] = distance
-
-                far_distance = (
-                    self.far_distance
-                )  # does not seem to need this in particular...
-                vector_zero_subset = (
-                    distance > far_distance
-                )  # > 5 meters, it become just a direction
-                ref_rb_pos_subset[vector_zero_subset, 0] = (
-                    (
-                        ref_rb_pos_subset[vector_zero_subset, 0]
-                        - body_pos_subset[vector_zero_subset, 0]
-                    )
-                    / distance[vector_zero_subset, None]
-                    * far_distance
-                ) + body_pos_subset[vector_zero_subset, 0]
-
-            if self._occl_training:
-                # ranomly occlude some of the body parts
-                random_occlu_idx = self.random_occlu_idx[env_ids]
-                ref_rb_pos_subset[random_occlu_idx] = body_pos_subset[random_occlu_idx]
-                ref_rb_rot_subset[random_occlu_idx] = body_rot_subset[random_occlu_idx]
-
-            obs = compute_imitation_observations_v7(
-                root_pos,
-                root_rot,
-                body_pos_subset,
-                body_vel_subset,
-                ref_rb_pos_subset,
-                ref_body_vel_subset,
-                time_steps,
-                self._has_upright_start,
-            )
+        if self._fut_tracks_dropout and not flags.test:
+            dropout_rate = 0.1
+            curr_num_envs = env_ids.shape[0]
+            obs = obs.view(curr_num_envs, self._num_traj_samples, -1)
+            mask = torch.rand(curr_num_envs, self._num_traj_samples) < dropout_rate
+            obs[mask, :] = 0
+            obs = obs.view(curr_num_envs, -1)
 
         if save_buffer:
             if self._fut_tracks:
