@@ -13,7 +13,7 @@ from mlexp_utils.dirs import proj_dir
 import numpy as np
 import matplotlib.pyplot as plt
 
-from viz.visual_data import BeatSaberVisualDataContainer
+from viz.visual_data import BeatSaberVisualDataContainer, VisualDataContainer
 from xror.xror import XROR
 import vispy
 
@@ -37,12 +37,8 @@ def main(args, remaining_args):
     filepath = f"{proj_dir}/data/theirs/their_vr_input.pkl"
     d = torch.load(filepath, map_location="cpu")
     frames = torch.cat([d["ref_rb_pos_subset"], d["ref_rb_rot_subset"]], dim=-1)
-
-    # Feed the frames to the isaac rollouter
-
-
-    frames_np = np.array(frames[0])
-    frames_np[..., [3, 4, 5, 6]] = frames_np[..., [4, 5, 6, 3]]
+    frames_np = np.array(frames)
+    # frames_np[..., [3, 4, 5, 6]] = frames_np[..., [4, 5, 6, 3]]
 
     # For Tensorboard logging
     writer = SummaryWriter(log_dir=f"{proj_dir}/logdir/{args.run_name}/{args.out_name}")
@@ -68,10 +64,10 @@ def main(args, remaining_args):
         border_color="r",
     )
     left_view.camera = scene.TurntableCamera(
-        up="z", fov=20.0, elevation=30.0, distance=10, azimuth=-60
+        up="z", fov=1.0, elevation=30.0, distance=10, azimuth=-60
     )
     left_view.camera.rect = 0, 0, 1, 1
-    visual_data = BeatSaberVisualDataContainer(left_view)
+    visual_data = VisualDataContainer(left_view)
 
     @canvas.events.resize.connect
     def resize(event=None):
@@ -80,64 +76,150 @@ def main(args, remaining_args):
 
     resize()
 
-    # Tracking head
-    head_sphere = visual_data.body_spheres[0]
-    left_hand_sphere = visual_data.body_spheres[1]
-    right_hand_sphere = visual_data.body_spheres[2]
     imgs = []
     for frame in tqdm(frames_np):
         part_data = frame
-        # part_data[..., [0, 1, 2]] = part_data[..., [2, 0, 1]]
-        # part_data[..., 0] *= -1
-        for body_i in range(3):
-            visual_data.body_spheres[body_i].transform.translate = (
-                part_data[body_i, 0],
-                part_data[body_i, 1],
-                part_data[body_i, 2],
-            )
-            visual_data.shadow_ellipses[body_i].center = (
-                part_data[body_i, 0],
-                part_data[body_i, 1],
-            )
-
-        unit_vec = np.array([1, 0, 0]) * 0.5
-
-        my_quat = part_data[:, 3:] * 1  # quaternion from Unity order
-        # my_quat = my_quat[..., [2, 0, 1, 3]]
-
-        left_right_hand_rotations = Rotation.from_quat(my_quat).as_matrix()
-        # left_right_hand_rotations[:, 0] *= -1
-        unit_vec_rotated = left_right_hand_rotations @ unit_vec
-
-        saber_pos = np.concatenate(
-            [part_data[0:, :3], part_data[0:, :3] + unit_vec_rotated[0:, :3]], axis=0
+        xyzs = part_data[..., :3]
+        original_quats = part_data[..., 3:]
+        visual_data.body_markers[0].set_data(
+            # pos=node_positions[t, [6, 11]],
+            pos=xyzs,
+            face_color=(1, 0, 0, 1),
+            edge_color=(0, 0, 0, 0),
+            size=0.2,
+            edge_width=0,
         )
-        visual_data.saber_lines.set_data(
-            pos=saber_pos,
-            color=(1, 0, 0, 1),
-            width=1,
-            connect=np.array([[0, 3], [1, 4], [2, 5]]),
+        for i in range(3):
+            visual_data.shadow_ellipses[i].center = xyzs[i, 0], xyzs[i, 1]
+
+        quats = original_quats * 1
+        quats[..., 0] *= -1
+        quats[..., :-1] *= -1
+
+        # For left hand, I notice that the axis of rotation should be green, not blue
+        quats[1, [0, 1, 2, 3]] = quats[1, [0, 2, 1, 3]]
+        quats[1, :-1] *= -1
+
+        # For right hand, same thing
+        quats[2, [0, 1, 2, 3]] = quats[2, [0, 2, 1, 3]]
+        quats[2, :-1] *= -1
+        quats[2, 0] *= -1
+        quats[2, :-1] *= -1
+
+        node_rotmats = Rotation.from_quat(quats).as_matrix()
+        node_rotmats[1, [0, 1, 2]] = node_rotmats[1, [0, 2, 1]]
+        node_rotmats[1, 2] *= -1
+        node_rotmats[1, 1] *= -1
+        node_rotmats[2, [0, 1, 2]] = node_rotmats[2, [0, 2, 1]]
+        node_rotmats[2, 2] *= -1
+        node_rotmats[2, [1, 2]] *= -1
+        correction = Rotation.from_euler("XYZ", [0, 0, 0]).as_matrix()
+        # correction = Rotation.from_euler("XYZ", [np.pi / 2, 0, 0]).as_matrix()
+
+        visual_data.sparse_axes[0].transform.reset()
+        visual_data.sparse_axes[1].transform.reset()
+        visual_data.sparse_axes[2].transform.reset()
+
+        visual_data.sparse_axes[0].transform.translate(xyzs[0])
+        visual_data.sparse_axes[1].transform.translate(xyzs[1])
+        visual_data.sparse_axes[2].transform.translate(xyzs[2])
+
+        visual_data.sparse_axes[0].transform.matrix[:-1, :-1] = (
+                correction @ node_rotmats[0]
+        )
+        visual_data.sparse_axes[1].transform.matrix[:-1, :-1] = (
+                correction @ node_rotmats[1]
+        )
+        visual_data.sparse_axes[2].transform.matrix[:-1, :-1] = (
+                correction @ node_rotmats[2]
         )
 
-        shadow_pos = saber_pos * 1
-        shadow_pos[..., 2] = 0
-        visual_data.shadow_lines.set_data(
-            pos=shadow_pos,
-            color=(0, 0, 0, 0.5),
-            width=1,
-            connect=np.array([[0, 3], [1, 4], [2, 5]]),
-        )
-
+        left_view.camera.azimuth = -135
+        left_view.camera.elevation = 10
+        left_view.camera.distance = 300
         canvas.update()
-        img_np = canvas.render()
-        imgs.append(img_np)
-        # plt.figure()
-        # plt.imshow(img_np)
-        # plt.show()
+        img_1 = canvas.render()
 
-    # writer.add_image(f"HeadAndHandsShouldLookLikeBeatSaber", img_np, 0, dataformats="HWC")
-    # vid = np.stack(imgs)[None]
-    # writer.add_video(f"HeadAndHandsShouldLookLikeBeatSaber", vid, 0, dataformats="NTHWC", fps=15)
+        left_view.camera.azimuth = -135
+        left_view.camera.elevation = 90
+        left_view.camera.distance = 300
+        canvas.update()
+        img_2 = canvas.render()
+
+        # quats[2, 0] *= 0
+        # quats[2, :-1] *= -1
+        #
+
+        quats[1, [0, 1, 2, 3]] = quats[1, [0, 2, 1, 3]]
+        quats[1, :-1] *= -1
+
+        quats[..., 0] *= -1
+        quats[..., :-1] *= -1
+
+        # quats[2, [0, 1, 2, 3]] = quats[2, [0, 2, 1, 3]]
+        # quats[2, 1] *= -1
+        # quats[2, :-1] *= -1
+
+        node_rotmats = Rotation.from_quat(quats).as_matrix()
+        # node_rotmats[1, [0, 1, 2]] = node_rotmats[1, [0, 2, 1]]
+        node_rotmats[2, [0, 1, 2]] = node_rotmats[2, [0, 2, 1]]
+        node_rotmats[2, 1] *= -1
+
+        visual_data.sparse_axes[0].transform.reset()
+        visual_data.sparse_axes[1].transform.reset()
+        visual_data.sparse_axes[2].transform.reset()
+
+        visual_data.sparse_axes[0].transform.translate(xyzs[0])
+        visual_data.sparse_axes[1].transform.translate(xyzs[1])
+        visual_data.sparse_axes[2].transform.translate(xyzs[2])
+
+        visual_data.sparse_axes[0].transform.matrix[:-1, :-1] = node_rotmats[0]
+        visual_data.sparse_axes[1].transform.matrix[:-1, :-1] = node_rotmats[1]
+        visual_data.sparse_axes[2].transform.matrix[:-1, :-1] = node_rotmats[2]
+
+        left_view.camera.azimuth = -135
+        left_view.camera.elevation = 10
+        left_view.camera.distance = 300
+        canvas.update()
+        img_3 = canvas.render()
+
+        left_view.camera.azimuth = -135
+        left_view.camera.elevation = 90
+        left_view.camera.distance = 300
+        canvas.update()
+        img_4 = canvas.render()
+
+        node_rotmats = Rotation.from_quat(original_quats).as_matrix()
+        visual_data.sparse_axes[0].transform.reset()
+        visual_data.sparse_axes[1].transform.reset()
+        visual_data.sparse_axes[2].transform.reset()
+        visual_data.sparse_axes[0].transform.translate(xyzs[0])
+        visual_data.sparse_axes[1].transform.translate(xyzs[1])
+        visual_data.sparse_axes[2].transform.translate(xyzs[2])
+        visual_data.sparse_axes[0].transform.matrix[:-1, :-1] = node_rotmats[0]
+        visual_data.sparse_axes[1].transform.matrix[:-1, :-1] = node_rotmats[1]
+        visual_data.sparse_axes[2].transform.matrix[:-1, :-1] = node_rotmats[2]
+
+        left_view.camera.azimuth = -135
+        left_view.camera.elevation = 10
+        left_view.camera.distance = 300
+        canvas.update()
+        img_5 = canvas.render()
+
+        left_view.camera.azimuth = -135
+        left_view.camera.elevation = 90
+        left_view.camera.distance = 300
+        canvas.update()
+        img_6 = canvas.render()
+
+        img_np = np.concatenate([img_1, img_2, img_3, img_4, img_5, img_6], axis=1)
+
+        imgs.append(img_np)
+        if args.debug_yes:
+            plt.figure()
+            plt.imshow(img_np)
+            plt.show()
+            plt.close()
 
     w = imageio.get_writer(
         "dump/movie.mp4",
