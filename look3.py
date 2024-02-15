@@ -92,6 +92,10 @@ def main(args, remaining_args):
         for i in range(3):
             visual_data.shadow_ellipses[i].center = xyzs[i, 0], xyzs[i, 1]
 
+        visual_data.sparse_axes[0].visible = False
+        visual_data.sparse_axes[1].visible = False
+        visual_data.sparse_axes[2].visible = True
+
         quats = original_quats * 1
         quats[..., 0] *= -1
         quats[..., :-1] *= -1
@@ -177,13 +181,13 @@ def main(args, remaining_args):
         visual_data.sparse_axes[1].transform.matrix[:-1, :-1] = node_rotmats[1]
         visual_data.sparse_axes[2].transform.matrix[:-1, :-1] = node_rotmats[2]
 
-        left_view.camera.azimuth = -135
-        left_view.camera.elevation = 10
+        left_view.camera.azimuth = 0
+        left_view.camera.elevation = 0
         left_view.camera.distance = 300
         canvas.update()
         img_3 = canvas.render()
 
-        left_view.camera.azimuth = -135
+        left_view.camera.azimuth = 0
         left_view.camera.elevation = 90
         left_view.camera.distance = 300
         canvas.update()
@@ -200,13 +204,13 @@ def main(args, remaining_args):
         visual_data.sparse_axes[1].transform.matrix[:-1, :-1] = node_rotmats[1]
         visual_data.sparse_axes[2].transform.matrix[:-1, :-1] = node_rotmats[2]
 
-        left_view.camera.azimuth = -135
-        left_view.camera.elevation = 10
+        left_view.camera.azimuth = 0
+        left_view.camera.elevation = 0
         left_view.camera.distance = 300
         canvas.update()
         img_5 = canvas.render()
 
-        left_view.camera.azimuth = -135
+        left_view.camera.azimuth = 0
         left_view.camera.elevation = 90
         left_view.camera.distance = 300
         canvas.update()
