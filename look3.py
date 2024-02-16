@@ -79,7 +79,7 @@ def main(args, remaining_args):
 
     imgs = []
     for frame in tqdm(frames_np):
-    # for frame in tqdm(frames_np[[0, -1]]):
+        # for frame in tqdm(frames_np[[0, -1]]):
         part_data = frame
         xyzs = part_data[..., :3]
         original_quats = part_data[..., 3:]
@@ -95,21 +95,27 @@ def main(args, remaining_args):
             visual_data.shadow_ellipses[i].center = xyzs[i, 0], xyzs[i, 1]
 
         quats = original_quats * 1
+        original_rotmat = Rotation.from_quat(original_quats).as_matrix()
 
-        visual_data.sparse_axes[0].visible = False
-        visual_data.sparse_axes[1].visible = False
+        visual_data.sparse_axes[0].visible = True
+        visual_data.sparse_axes[1].visible = True
         visual_data.sparse_axes[2].visible = True
 
-        correction = np.stack([
-            Rotation.from_euler("XYZ", [0, 0, 0]).as_matrix(),
-            Rotation.from_euler("XYZ", [-0.5 * np.pi, 0, 0]).as_matrix(),
-            Rotation.from_euler("XYZ", [-0.5 * np.pi, 0, 0]).as_matrix(),
-        ], axis=0)
+        correction = np.stack(
+            [
+                Rotation.from_euler("XYZ", [0, 0, 0]).as_matrix(),
+                Rotation.from_euler("XYZ", [0.5 * np.pi, 0, 0]).as_matrix(),
+                Rotation.from_euler("XYZ", [-0.5 * np.pi, 0, 0]).as_matrix(),
+            ],
+            axis=0,
+        )
 
         corrected_quats = Rotation.from_matrix(correction) * Rotation.from_quat(quats)
         corrected_quats = corrected_quats.as_quat()
         corrected_quats[0, 0] *= -1
         corrected_quats[0, :-1] *= -1
+        corrected_quats[1, [0, 1, 2, 3]] = corrected_quats[1, [0, 2, 1, 3]]
+        corrected_quats[1, [0, 1]] *= -1
         corrected_quats[2, [0, 1, 2, 3]] = corrected_quats[2, [0, 2, 1, 3]]
         corrected_quats[2, :-1] *= -1
         corrected_matrot = Rotation.from_quat(corrected_quats).as_matrix()
@@ -138,25 +144,8 @@ def main(args, remaining_args):
         canvas.update()
         img_2 = canvas.render()
 
-        # quats[2, 0] *= 0
-        # quats[2, :-1] *= -1
-        #
-
-        # quats[1, [0, 1, 2, 3]] = quats[1, [0, 2, 1, 3]]
-        # quats[1, :-1] *= -1
-        #
-        # quats[..., [1, 2]] *= -1
-        # quats[..., :-1] *= -1
-        #
-        # # quats[2, [0, 1, 2, 3]] = quats[2, [0, 2, 1, 3]]
-        # # quats[2, 0] *= -1
-        # quats[2, 1] *= -1
-        # quats[2, :-1] *= -1
-
-        node_rotmats = Rotation.from_quat(quats).as_matrix()
-        # node_rotmats[1, [0, 1, 2]] = node_rotmats[1, [0, 2, 1]]
-        # node_rotmats[2, [0, 1, 2]] = node_rotmats[2, [0, 2, 1]]
-        # node_rotmats[2, 0] *= -1
+        node_rotmats = corrected_matrot
+        deproject_rotmats = original_rotmat @ corrected_matrot.transpose((0, 2, 1))
 
         visual_data.sparse_axes[0].transform.reset()
         visual_data.sparse_axes[1].transform.reset()
@@ -166,9 +155,15 @@ def main(args, remaining_args):
         visual_data.sparse_axes[1].transform.translate(xyzs[1])
         visual_data.sparse_axes[2].transform.translate(xyzs[2])
 
-        visual_data.sparse_axes[0].transform.matrix[:-1, :-1] = node_rotmats[0]
-        visual_data.sparse_axes[1].transform.matrix[:-1, :-1] = node_rotmats[1]
-        visual_data.sparse_axes[2].transform.matrix[:-1, :-1] = node_rotmats[2]
+        visual_data.sparse_axes[0].transform.matrix[:-1, :-1] = (
+            deproject_rotmats[0] @ node_rotmats[0]
+        )
+        visual_data.sparse_axes[1].transform.matrix[:-1, :-1] = (
+            deproject_rotmats[1] @ node_rotmats[1]
+        )
+        visual_data.sparse_axes[2].transform.matrix[:-1, :-1] = (
+            deproject_rotmats[2] @ node_rotmats[2]
+        )
 
         left_view.camera.azimuth = -135
         left_view.camera.elevation = 0
