@@ -34,7 +34,8 @@ def main(args, remaining_args):
 
     # filepath = f"{proj_dir}/dataset/025bcf95-9be6-4620-8d68-6b5903e62aee/163bd29f-3209-4890-936f-3fc77dccd19b.xror"
     # filepath = f"{proj_dir}/dataset/025bcf95-9be6-4620-8d68-6b5903e62aee/284e1d66-7bba-4160-969b-0e3ccd0dc5e6.xror"
-    filepath = f"{proj_dir}/data/theirs/their_vr_input.pkl"
+    # filepath = f"{proj_dir}/data/theirs/their_vr_input.pkl"
+    filepath = f"{proj_dir}/data/theirs/turn.pkl"
     d = torch.load(filepath, map_location="cpu")
     frames = torch.cat([d["ref_rb_pos_subset"], d["ref_rb_rot_subset"]], dim=-1)
     frames_np = np.array(frames)
@@ -78,6 +79,7 @@ def main(args, remaining_args):
 
     imgs = []
     for frame in tqdm(frames_np):
+    # for frame in tqdm(frames_np[[0, -1]]):
         part_data = frame
         xyzs = part_data[..., :3]
         original_quats = part_data[..., 3:]
@@ -92,33 +94,25 @@ def main(args, remaining_args):
         for i in range(3):
             visual_data.shadow_ellipses[i].center = xyzs[i, 0], xyzs[i, 1]
 
+        quats = original_quats * 1
+
         visual_data.sparse_axes[0].visible = False
         visual_data.sparse_axes[1].visible = False
         visual_data.sparse_axes[2].visible = True
 
-        quats = original_quats * 1
-        quats[..., 0] *= -1
-        quats[..., :-1] *= -1
+        correction = np.stack([
+            Rotation.from_euler("XYZ", [0, 0, 0]).as_matrix(),
+            Rotation.from_euler("XYZ", [-0.5 * np.pi, 0, 0]).as_matrix(),
+            Rotation.from_euler("XYZ", [-0.5 * np.pi, 0, 0]).as_matrix(),
+        ], axis=0)
 
-        # For left hand, I notice that the axis of rotation should be green, not blue
-        quats[1, [0, 1, 2, 3]] = quats[1, [0, 2, 1, 3]]
-        quats[1, :-1] *= -1
-
-        # For right hand, same thing
-        quats[2, [0, 1, 2, 3]] = quats[2, [0, 2, 1, 3]]
-        quats[2, :-1] *= -1
-        quats[2, 0] *= -1
-        quats[2, :-1] *= -1
-
-        node_rotmats = Rotation.from_quat(quats).as_matrix()
-        node_rotmats[1, [0, 1, 2]] = node_rotmats[1, [0, 2, 1]]
-        node_rotmats[1, 2] *= -1
-        node_rotmats[1, 1] *= -1
-        node_rotmats[2, [0, 1, 2]] = node_rotmats[2, [0, 2, 1]]
-        node_rotmats[2, 2] *= -1
-        node_rotmats[2, [1, 2]] *= -1
-        correction = Rotation.from_euler("XYZ", [0, 0, 0]).as_matrix()
-        # correction = Rotation.from_euler("XYZ", [np.pi / 2, 0, 0]).as_matrix()
+        corrected_quats = Rotation.from_matrix(correction) * Rotation.from_quat(quats)
+        corrected_quats = corrected_quats.as_quat()
+        corrected_quats[0, 0] *= -1
+        corrected_quats[0, :-1] *= -1
+        corrected_quats[2, [0, 1, 2, 3]] = corrected_quats[2, [0, 2, 1, 3]]
+        corrected_quats[2, :-1] *= -1
+        corrected_matrot = Rotation.from_quat(corrected_quats).as_matrix()
 
         visual_data.sparse_axes[0].transform.reset()
         visual_data.sparse_axes[1].transform.reset()
@@ -128,15 +122,9 @@ def main(args, remaining_args):
         visual_data.sparse_axes[1].transform.translate(xyzs[1])
         visual_data.sparse_axes[2].transform.translate(xyzs[2])
 
-        visual_data.sparse_axes[0].transform.matrix[:-1, :-1] = (
-                correction @ node_rotmats[0]
-        )
-        visual_data.sparse_axes[1].transform.matrix[:-1, :-1] = (
-                correction @ node_rotmats[1]
-        )
-        visual_data.sparse_axes[2].transform.matrix[:-1, :-1] = (
-                correction @ node_rotmats[2]
-        )
+        visual_data.sparse_axes[0].transform.matrix[:-1, :-1] = corrected_matrot[0]
+        visual_data.sparse_axes[1].transform.matrix[:-1, :-1] = corrected_matrot[1]
+        visual_data.sparse_axes[2].transform.matrix[:-1, :-1] = corrected_matrot[2]
 
         left_view.camera.azimuth = -135
         left_view.camera.elevation = 10
@@ -154,20 +142,21 @@ def main(args, remaining_args):
         # quats[2, :-1] *= -1
         #
 
-        quats[1, [0, 1, 2, 3]] = quats[1, [0, 2, 1, 3]]
-        quats[1, :-1] *= -1
-
-        quats[..., 0] *= -1
-        quats[..., :-1] *= -1
-
-        # quats[2, [0, 1, 2, 3]] = quats[2, [0, 2, 1, 3]]
+        # quats[1, [0, 1, 2, 3]] = quats[1, [0, 2, 1, 3]]
+        # quats[1, :-1] *= -1
+        #
+        # quats[..., [1, 2]] *= -1
+        # quats[..., :-1] *= -1
+        #
+        # # quats[2, [0, 1, 2, 3]] = quats[2, [0, 2, 1, 3]]
+        # # quats[2, 0] *= -1
         # quats[2, 1] *= -1
         # quats[2, :-1] *= -1
 
         node_rotmats = Rotation.from_quat(quats).as_matrix()
         # node_rotmats[1, [0, 1, 2]] = node_rotmats[1, [0, 2, 1]]
-        node_rotmats[2, [0, 1, 2]] = node_rotmats[2, [0, 2, 1]]
-        node_rotmats[2, 1] *= -1
+        # node_rotmats[2, [0, 1, 2]] = node_rotmats[2, [0, 2, 1]]
+        # node_rotmats[2, 0] *= -1
 
         visual_data.sparse_axes[0].transform.reset()
         visual_data.sparse_axes[1].transform.reset()
@@ -181,13 +170,13 @@ def main(args, remaining_args):
         visual_data.sparse_axes[1].transform.matrix[:-1, :-1] = node_rotmats[1]
         visual_data.sparse_axes[2].transform.matrix[:-1, :-1] = node_rotmats[2]
 
-        left_view.camera.azimuth = 0
+        left_view.camera.azimuth = -135
         left_view.camera.elevation = 0
         left_view.camera.distance = 300
         canvas.update()
         img_3 = canvas.render()
 
-        left_view.camera.azimuth = 0
+        left_view.camera.azimuth = -135
         left_view.camera.elevation = 90
         left_view.camera.distance = 300
         canvas.update()
@@ -204,24 +193,27 @@ def main(args, remaining_args):
         visual_data.sparse_axes[1].transform.matrix[:-1, :-1] = node_rotmats[1]
         visual_data.sparse_axes[2].transform.matrix[:-1, :-1] = node_rotmats[2]
 
-        left_view.camera.azimuth = 0
+        left_view.camera.azimuth = -135
         left_view.camera.elevation = 0
         left_view.camera.distance = 300
         canvas.update()
         img_5 = canvas.render()
 
-        left_view.camera.azimuth = 0
+        left_view.camera.azimuth = -135
         left_view.camera.elevation = 90
         left_view.camera.distance = 300
         canvas.update()
         img_6 = canvas.render()
 
         img_np = np.concatenate([img_1, img_2, img_3, img_4, img_5, img_6], axis=1)
+        # img_np = np.concatenate([img_3, img_4, img_5, img_6], axis=1)
 
         imgs.append(img_np)
         if args.debug_yes:
             plt.figure()
             plt.imshow(img_np)
+            # plt.imshow(np.concatenate(imgs, axis=0))
+            plt.tight_layout()
             plt.show()
             plt.close()
 
