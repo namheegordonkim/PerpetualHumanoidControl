@@ -177,7 +177,8 @@ class XMLVisualDataContainer:
             for grandchild in child.findall("body")[::-1]:
                 body_stack.append((child, grandchild, global_child_offset))
 
-        self.plane = pv.Cube(center=(0, 0, -0.05), x_length=5, y_length=5, z_length=0.1)
+        # self.plane = pv.Cube(center=(0, 0, -0.05), x_length=5, y_length=5, z_length=0.1)
+        self.plane = pv.Plane(center=(0, 0, 0), i_size=10, j_size=10)
 
         # Following the DFS encounter order, create PyVista meshes
         self.meshes = []
@@ -217,3 +218,7 @@ class XMLVisualDataContainer:
             ax = pv.Axes()
             self.axes.append(ax)
 
+        self.targets = []
+        for _ in range(24):
+            sphere = pv.Sphere(radius=0.05)
+            self.targets.append(sphere)

@@ -1,23 +1,18 @@
 from argparse import ArgumentParser
 
 import imageio
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
-from scipy.signal import savgol_filter
+import vispy
 from scipy.spatial.transform import Rotation
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
-from vispy import scene
 
+import pyvista as pv
 from mlexp_utils import my_logging
 from mlexp_utils.dirs import proj_dir
-import numpy as np
-import matplotlib.pyplot as plt
-
-from viz.visual_data import BeatSaberVisualDataContainer, VisualDataContainer
 from viz.visual_data_pv import XMLVisualDataContainer
-from xror.xror import XROR
-import vispy
-import pyvista as pv
 
 vispy.use("egl")
 
@@ -44,7 +39,7 @@ def main(args, remaining_args):
 
     visual_data = XMLVisualDataContainer("phc/data/assets/mjcf/my_smpl_humanoid.xml")
 
-    posrot = torch.load("data/ours/posrot.pkl")
+    posrot = torch.load(args.in_path)
     rb_pos = posrot["rb_pos"]
     rb_rot = posrot["rb_rot"]
 
@@ -61,7 +56,7 @@ def main(args, remaining_args):
     pl.enable_shadows()
 
     imgs = []
-    for t in range(0, rb_pos.shape[0]):
+    for t in tqdm(range(0, rb_pos.shape[0])):
         for i, actor in enumerate(actors):
             # ax_actor = ax_actors[i]
             m = np.eye(4)
@@ -85,7 +80,7 @@ def main(args, remaining_args):
         imgs.append(img)
 
     w = imageio.get_writer(
-        "dump/movie.mp4",
+        args.out_path,
         format="FFMPEG",
         mode="I",
         fps=15,
@@ -105,6 +100,8 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--run_name", type=str, required=True)
     parser.add_argument("--out_name", type=str, required=True)
+    parser.add_argument("--in_path", type=str, required=True)
+    parser.add_argument("--out_path", type=str, required=True)
     parser.add_argument(
         "--debug_yes", "-d", action="store_true"
     )  # if set, will pause the program

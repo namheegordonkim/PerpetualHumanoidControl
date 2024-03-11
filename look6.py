@@ -13,8 +13,7 @@ import pyvista as pv
 from mlexp_utils import my_logging
 from mlexp_utils.dirs import proj_dir
 from viz.visual_data_pv import XMLVisualDataContainer
-
-vispy.use("egl")
+import rerun as rr
 
 
 def main(args, remaining_args):
@@ -23,16 +22,18 @@ def main(args, remaining_args):
 
         pydevd_pycharm.settrace(
             "localhost",
-            port=12346,
+            port=12345,
             stdoutToServer=True,
             stderrToServer=True,
             suspend=False,
         )
 
     # For Tensorboard logging
-    writer = SummaryWriter(log_dir=f"{proj_dir}/logdir/{args.run_name}/{args.out_name}")
-    writer.add_text("args", str(args.__dict__))
-    writer.add_text("remaining_args", str(remaining_args))
+    # writer = SummaryWriter(log_dir=f"{proj_dir}/logdir/{args.run_name}/{args.out_name}")
+    # writer.add_text("args", str(args.__dict__))
+    # writer.add_text("remaining_args", str(remaining_args))
+    d = torch.load(args.in_posrot_path)
+    rr.init(d["exp_name"], recording_id=d["exp_name"])
 
     logger = my_logging.get_logger(f"{args.out_name}")
     logger.info(f"Starting")
@@ -42,9 +43,14 @@ def main(args, remaining_args):
     posrot = torch.load(args.in_posrot_path)
     rb_pos = posrot["rb_pos"]
     rb_rot = posrot["rb_rot"]
+    cumulative_r = np.sum(posrot["rewards"], axis=(-2, -1)).reshape(-1)
 
-    my_3p = torch.load(args.in_3p_path)
-    ref_rb_pos_subset = my_3p["ref_rb_pos_subset"][None].detach().cpu().numpy()
+    rr.set_time_sequence("epoch", d["epoch"])
+    rr.log(f"CumulativeReward", rr.Scalar(cumulative_r))
+
+    # my_3p = torch.load(args.in_3p_path)
+    # ref_rb_pos_subset = my_3p["ref_rb_pos_subset"][None].detach().cpu().numpy()
+    ref_rb_pos = posrot["ref_rb_pos"]
 
     pl = pv.Plotter(off_screen=True, window_size=(608, 608))
     # pl = pv.Plotter(off_screen=False, window_size=(608, 608))
@@ -56,19 +62,20 @@ def main(args, remaining_args):
         actors.append(actor)
 
     target_actors = []
-    for i in range(3):
-        actor = pl.add_mesh(visual_data.targets[i], color="red", opacity=0.5)
+    for i in range(24):
+        actor = pl.add_mesh(visual_data.targets[i], color="red")
         target_actors.append(actor)
 
     pl.enable_shadows()
 
     imgs = []
-    for t in tqdm(range(0, rb_pos.shape[0])):
+    for t in tqdm(range(0, rb_pos.shape[1], 4)):
+    # for t in tqdm(range(0, 12, 2)):
         for i, actor in enumerate(actors):
             # ax_actor = ax_actors[i]
             m = np.eye(4)
-            pos = rb_pos[t, i] * 1
-            quat = rb_rot[t, i] * 1
+            pos = rb_pos[0, t, i] * 1
+            quat = rb_rot[0, t, i] * 1
             m[:3, :3] = Rotation.from_quat(quat).as_matrix()
             m[:3, 3] = pos
             actor.user_matrix = m
@@ -76,7 +83,7 @@ def main(args, remaining_args):
 
         for i, actor in enumerate(target_actors):
             m = np.eye(4)
-            pos = ref_rb_pos_subset[0, t, i] * 1
+            pos = ref_rb_pos[0, t, i] * 1
             m[:3, 3] = pos
             actor.user_matrix = m
 
@@ -87,35 +94,28 @@ def main(args, remaining_args):
         # pl.show()
 
         # plt.figure()
-        img = pl.screenshot()
+        img = np.array(pl.screenshot())
+        # img = pl.screenshot()
         # plt.imshow(img)
         # plt.show()
         imgs.append(img)
 
-    w = imageio.get_writer(
-        args.out_path,
-        format="FFMPEG",
-        mode="I",
-        fps=15,
-        codec="h264",
-        pixelformat="yuv420p",
-    )
-    for img in imgs:
-        w.append_data(img)
-    w.close()
-
+    for i, img in enumerate(imgs):
+        # rr.set_time_sequence("epoch", d['epoch'])
+        rr.set_time_sequence("frame", i)
+        rr.log(f"EvalVideo/{d['epoch']:06d}", rr.Image(img))
     plt.close()
-
+    rr.save(f"{proj_dir}/output/{d['exp_name']}_epoch{d['epoch']:06d}.rrd")
     logger.info(f"Done")
 
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("--run_name", type=str, required=True)
+    # parser.add_argument("--run_name", type=str, required=True)
     parser.add_argument("--out_name", type=str, required=True)
     parser.add_argument("--in_posrot_path", type=str, required=True)
-    parser.add_argument("--in_3p_path", type=str, required=True)
-    parser.add_argument("--out_path", type=str, required=True)
+    # parser.add_argument("--in_3p_path", type=str, required=True)
+    # parser.add_argument("--out_path", type=str, required=True)
     parser.add_argument(
         "--debug_yes", "-d", action="store_true"
     )  # if set, will pause the program

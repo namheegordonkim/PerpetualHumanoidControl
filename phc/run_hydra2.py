@@ -31,6 +31,9 @@ import os
 import sys
 import pdb
 import os.path as osp
+import time
+
+from tqdm import tqdm
 
 sys.path.append(os.getcwd())
 
@@ -39,12 +42,19 @@ from phc.utils.parse_task import parse_task
 from isaacgym import gymapi
 from isaacgym import gymutil
 
-
-from rl_games.algos_torch import players
+from rl_games.algos_torch import (
+    players,
+    a2c_continuous,
+    a2c_discrete,
+    sac_agent,
+    model_builder,
+    network_builder,
+)
 from rl_games.algos_torch import torch_ext
 from rl_games.common import env_configurations, experiment, vecenv
 from rl_games.common.algo_observer import AlgoObserver
 from rl_games.torch_runner import Runner
+from rl_games.common import object_factory
 
 from phc.utils.flags import flags
 
@@ -70,6 +80,213 @@ from easydict import EasyDict
 args = None
 cfg = None
 cfg_train = None
+COLLECT_Z = False
+
+
+class MyPlayer(im_amp_players.IMAMPPlayerContinuous):
+    def __init__(self, config):
+        super().__init__(config)
+
+        self.rb_pos_history = []
+        self.rb_rot_history = []
+        self.rb_vel_history = []
+        self.rb_ang_history = []
+
+        d = torch.load(cfg["in_3p_path"])
+
+        self.max_steps = d["ref_rb_pos_subset"].shape[0] - 1
+
+    def run(self):
+        n_games = self.games_num
+        render = self.render_env
+        n_game_life = self.n_game_life
+        is_determenistic = self.is_determenistic
+        sum_rewards = 0
+        sum_steps = 0
+        sum_game_res = 0
+        n_games = 1
+        # n_games = n_games * n_game_life
+        games_played = 0
+        has_masks = False
+        has_masks_func = getattr(self.env, "has_action_mask", None) is not None
+
+        op_agent = getattr(self.env, "create_agent", None)
+        if op_agent:
+            agent_inited = True
+
+        if has_masks_func:
+            has_masks = self.env.has_action_mask()
+
+        need_init_rnn = self.is_rnn
+        for t in range(n_games):
+            if games_played >= n_games:
+                break
+            obs_dict = self.env_reset()
+
+            batch_size = 1
+            batch_size = self.get_batch_size(obs_dict["obs"], batch_size)
+
+            if need_init_rnn:
+                self.init_rnn()
+                need_init_rnn = False
+
+            cr = torch.zeros(batch_size, dtype=torch.float32, device=self.device)
+            steps = torch.zeros(batch_size, dtype=torch.float32, device=self.device)
+
+            print_game_res = False
+
+            done_indices = []
+
+            with torch.no_grad():
+                for n in tqdm(range(self.max_steps)):
+                    obs_dict = self.env_reset(done_indices)
+
+                    if COLLECT_Z:
+                        z = self.get_z(obs_dict)
+
+                    if has_masks:
+                        masks = self.env.get_action_mask()
+                        action = self.get_masked_action(
+                            obs_dict, masks, is_determenistic
+                        )
+                    else:
+                        action = self.get_action(obs_dict, is_determenistic)
+
+                    obs_dict, r, done, info = self.env_step(self.env, action)
+
+                    cr += r
+                    steps += 1
+
+                    if COLLECT_Z:
+                        info["z"] = z
+                    done = self._post_step(info, done.clone())
+
+                    if render:
+                        self.env.render(mode="human")
+                        time.sleep(self.render_sleep)
+
+                    self.rb_pos_history.append(self.env.task._rigid_body_pos.detach().cpu().numpy())
+                    self.rb_rot_history.append(self.env.task._rigid_body_rot.detach().cpu().numpy())
+                    self.rb_vel_history.append(self.env.task._rigid_body_vel.detach().cpu().numpy())
+                    self.rb_ang_history.append(self.env.task._rigid_body_ang_vel.detach().cpu().numpy())
+
+                    all_done_indices = done.nonzero(as_tuple=False)
+                    done_indices = all_done_indices[:: self.num_agents]
+                    done_count = len(done_indices)
+                    games_played += done_count
+
+                    if done_count > 0:
+                        if self.is_rnn:
+                            for s in self.states:
+                                s[:, all_done_indices, :] = (
+                                        s[:, all_done_indices, :] * 0.0
+                                )
+
+                        cur_rewards = cr[done_indices].sum().item()
+                        cur_steps = steps[done_indices].sum().item()
+
+                        cr = cr * (1.0 - done.float())
+                        steps = steps * (1.0 - done.float())
+                        sum_rewards += cur_rewards
+                        sum_steps += cur_steps
+
+                        game_res = 0.0
+                        if isinstance(info, dict):
+                            if "battle_won" in info:
+                                print_game_res = True
+                                game_res = info.get("battle_won", 0.5)
+                            if "scores" in info:
+                                print_game_res = True
+                                game_res = info.get("scores", 0.5)
+                        if self.print_stats:
+                            if print_game_res:
+                                print(
+                                    "reward:",
+                                    cur_rewards / done_count,
+                                    "steps:",
+                                    cur_steps / done_count,
+                                    "w:",
+                                    game_res,
+                                )
+                            else:
+                                print(
+                                    "reward:",
+                                    cur_rewards / done_count,
+                                    "steps:",
+                                    cur_steps / done_count,
+                                )
+
+                        sum_game_res += game_res
+                        # if batch_size//self.num_agents == 1 or games_played >= n_games:
+                        if games_played >= n_games:
+                            break
+
+                    done_indices = done_indices[:, 0]
+
+        pos_concated = np.concatenate(self.rb_pos_history, axis=0)
+        rot_concated = np.concatenate(self.rb_rot_history, axis=0)
+        vel_concated = np.concatenate(self.rb_vel_history, axis=0)
+        ang_concated = np.concatenate(self.rb_ang_history, axis=0)
+        d = {
+            "rb_pos": pos_concated,
+            "rb_rot": rot_concated,
+            "rb_vel": vel_concated,
+            "rb_ang": ang_concated,
+        }
+        torch.save(d, cfg["out_posrot_path"])
+
+        # vels_normed = np.linalg.norm(vels_concated, axis=-1)
+        return
+
+
+class MyRunner(Runner):
+
+    def __init__(self, algo_observer=None):
+        self.algo_factory = object_factory.ObjectFactory()
+        self.algo_factory.register_builder(
+            "a2c_continuous", lambda **kwargs: a2c_continuous.A2CAgent(**kwargs)
+        )
+        self.algo_factory.register_builder(
+            "a2c_discrete", lambda **kwargs: a2c_discrete.DiscreteA2CAgent(**kwargs)
+        )
+        self.algo_factory.register_builder(
+            "sac", lambda **kwargs: sac_agent.SACAgent(**kwargs)
+        )
+        # self.algo_factory.register_builder('dqn', lambda **kwargs : dqnagent.DQNAgent(**kwargs))
+
+        self.player_factory = object_factory.ObjectFactory()
+        self.player_factory.register_builder(
+            "a2c_continuous", lambda **kwargs: MyPlayer(**kwargs)
+        )
+        self.player_factory.register_builder(
+            "a2c_discrete", lambda **kwargs: players.PpoPlayerDiscrete(**kwargs)
+        )
+        self.player_factory.register_builder(
+            "sac", lambda **kwargs: players.SACPlayer(**kwargs)
+        )
+        # self.player_factory.register_builder('dqn', lambda **kwargs : players.DQNPlayer(**kwargs))
+
+        self.model_builder = model_builder.ModelBuilder()
+        self.network_builder = network_builder.NetworkBuilder()
+
+        self.algo_observer = algo_observer
+
+        torch.backends.cudnn.benchmark = True
+
+    def run(self, args):
+        if "checkpoint" in args and args["checkpoint"] is not None:
+            if len(args["checkpoint"]) > 0:
+                self.load_path = args["checkpoint"]
+
+        if args["train"]:
+            self.run_train()
+        elif args["play"]:
+            print("Started to play")
+            player = self.create_player()
+            player.restore(self.load_path)
+            player.run()
+        else:
+            self.run_train()
 
 
 def parse_sim_params(cfg):
@@ -274,7 +491,8 @@ env_configurations.register(
 
 
 def build_alg_runner(algo_observer):
-    runner = Runner(algo_observer)
+    # runner = Runner(algo_observer)
+    runner = MyRunner(algo_observer)
     runner.player_factory.register_builder(
         "amp_discrete", lambda **kwargs: amp_players.AMPPlayerDiscrete(**kwargs)
     )
@@ -303,7 +521,7 @@ def build_alg_runner(algo_observer):
         "im_amp", lambda **kwargs: im_amp.IMAmpAgent(**kwargs)
     )
     runner.player_factory.register_builder(
-        "im_amp", lambda **kwargs: im_amp_players.IMAMPPlayerContinuous(**kwargs)
+        "im_amp", lambda **kwargs: MyPlayer(**kwargs)
     )
 
     return runner
@@ -426,5 +644,4 @@ if __name__ == "__main__":
     pydevd_pycharm.settrace(
         "localhost", port=12346, stdoutToServer=True, stderrToServer=True, suspend=False
     )
-
     main()

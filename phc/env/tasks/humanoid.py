@@ -124,6 +124,7 @@ class Humanoid(BaseTask):
         self.self_obs_buf = torch.zeros((self.num_envs, self.get_self_obs_size()), device=self.device, dtype=torch.float)
         self.reward_raw = torch.zeros((self.num_envs, 1)).to(self.device)
 
+        self.actions = None
         return
 
     def _load_proj_asset(self):
@@ -310,7 +311,7 @@ class Humanoid(BaseTask):
         self.max_len = cfg["env"].get("max_len", -1)
         self.cycle_motion_xp = cfg["env"].get("cycle_motion_xp", False)  # Cycle motion, but cycle farrrrr.
         self.models_path = cfg["env"].get("models", ['output/dgx/smpl_im_fit_3_1/Humanoid_00185000.pth', 'output/dgx/smpl_im_fit_3_2/Humanoid_00198750.pth'])
-        
+        # self.models_path = 'output/HumanoidIm/phc_shape_pnn_iccv/Humanoid.pth'
         self.eval_full = cfg["env"].get("eval_full", False)
         self.auto_pmcp = cfg["env"].get("auto_pmcp", False)
         self.auto_pmcp_soft = cfg["env"].get("auto_pmcp_soft", False)
@@ -570,8 +571,8 @@ class Humanoid(BaseTask):
 
         self.gym.set_actor_root_state_tensor_indexed(self.sim, gymtorch.unwrap_tensor(self._root_states), gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
         self.gym.set_dof_state_tensor_indexed(self.sim, gymtorch.unwrap_tensor(self._dof_state), gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
-        
-        
+        if self.actions is not None:
+            self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(torch.zeros_like(self.actions)))
         # print("#################### refreshing ####################")
         # print("rb", (self._rigid_body_state_reshaped[None, :] - self._rigid_body_state_reshaped[:, None]).abs().sum())
         # print("contact", (self._contact_forces[None, :] - self._contact_forces[:, None]).abs().sum())
@@ -771,14 +772,17 @@ class Humanoid(BaseTask):
                 jobs = [jobs[i:i + chunk] for i in range(0, len(jobs), chunk)]
                 job_args = [jobs[i] for i in range(len(jobs))]
 
-                for i in range(1, len(jobs)):
-                    worker_args = (job_args[i], robot, queue, i)
-                    worker = multiprocessing.Process(target=self._create_smpl_humanoid_xml, args=worker_args)
-                    worker.start()
-                res_acc.update(self._create_smpl_humanoid_xml(jobs[0], robot, None, 0))
-                for i in tqdm(range(len(jobs) - 1)):
-                    res = queue.get()
-                    res_acc.update(res)
+                for i in tqdm(range(len(jobs[0]))):
+                    res_acc.update(self._create_smpl_humanoid_xml(np.array([i]), robot, None, i))
+
+                # for i in range(1, len(jobs)):
+                #     worker_args = (job_args[i], robot, queue, i)
+                #     worker = multiprocessing.Process(target=self._create_smpl_humanoid_xml, args=worker_args)
+                #     worker.start()
+                # res_acc.update(self._create_smpl_humanoid_xml(jobs[0], robot, None, 0))
+                # for i in tqdm(range(len(jobs) - 1)):
+                #     res = queue.get()
+                #     res_acc.update(res)
 
                 for idx in np.arange(num_envs):
                     gender_beta, asset_file_real = res_acc[idx]
@@ -1094,6 +1098,7 @@ class Humanoid(BaseTask):
 
     def _compute_reset(self):
         self.reset_buf[:], self._terminate_buf[:] = compute_humanoid_reset(self.reset_buf, self.progress_buf, self._contact_forces, self._contact_body_ids, self._rigid_body_pos, self.max_episode_length, self._enable_early_termination, self._termination_heights)
+        self.reset_buf[:] = 0
         return
 
     def _refresh_sim_tensors(self):

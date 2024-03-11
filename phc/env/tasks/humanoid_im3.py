@@ -1,3 +1,4 @@
+import os
 import os.path as osp
 from typing import OrderedDict
 import torch
@@ -31,6 +32,7 @@ import imageio
 from collections import deque
 from tqdm import tqdm
 import copy
+from typing import OrderedDict
 
 
 class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
@@ -135,7 +137,6 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
         self.ref_body_pos = torch.zeros_like(self._rigid_body_pos)
         self.ref_body_vel = torch.zeros_like(self._rigid_body_vel)
         self.ref_body_rot = torch.zeros_like(self._rigid_body_rot)
-        self.ref_body_ang_vel = torch.zeros_like(self._rigid_body_ang_vel)
         self.ref_body_pos_subset = torch.zeros_like(
             self._rigid_body_pos[:, self._track_bodies_id]
         )
@@ -404,41 +405,68 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
         assert self._dof_offsets[-1] == self.num_dof
 
         if self.humanoid_type in ["smpl", "smplh", "smplx"]:
-            motion_lib_cfg = EasyDict(
-                {
-                    "motion_file": motion_train_file,
-                    "device": torch.device("cpu"),
-                    "fix_height": FixHeightMode.full_fix,
-                    "min_length": self._min_motion_len,
-                    "max_length": -1,
-                    "im_eval": flags.im_eval,
-                    "multi_thread": True,
-                    "smpl_type": self.humanoid_type,
-                    "randomrize_heading": True,
-                    "device": self.device,
-                }
-            )
-            motion_eval_file = motion_train_file
-            self._motion_train_lib = MotionLibSMPL(motion_lib_cfg)
-            motion_lib_cfg.im_eval = True
-            self._motion_eval_lib = MotionLibSMPL(motion_lib_cfg)
+            # motion_lib_cfg = EasyDict(
+            #     {
+            #         "motion_file": motion_train_file,
+            #         "device": torch.device("cpu"),
+            #         "fix_height": FixHeightMode.full_fix,
+            #         "min_length": self._min_motion_len,
+            #         "max_length": -1,
+            #         "im_eval": flags.im_eval,
+            #         "multi_thread": True,
+            #         "smpl_type": self.humanoid_type,
+            #         "randomrize_heading": True,
+            #         "device": self.device,
+            #     }
+            # )
+            # torch.save(motion_lib_cfg, "data/theirs/motion_lib_cfg.pkl")
+            #
+            # motion_eval_file = motion_train_file
+            # self._motion_train_lib = MotionLibSMPL(motion_lib_cfg)
+            # motion_lib_cfg.im_eval = True
+            # self._motion_eval_lib = MotionLibSMPL(motion_lib_cfg)
+            #
+            # self._motion_lib = self._motion_train_lib
+            # load_motions_kwargs = {
+            #     "skeleton_trees": self.skeleton_trees,
+            #     "gender_betas": self.humanoid_shapes.cpu(),
+            #     "limb_weights": self.humanoid_limb_and_weights.cpu(),
+            #     "random_sample": (not flags.test) and (not self.seq_motions),
+            #     "max_len": -1 if flags.test else self.max_len,
+            # }
+            # torch.save(load_motions_kwargs, "data/theirs/load_motions_kwargs.pkl")
+            # self._motion_lib.load_motions(**load_motions_kwargs)
 
-            self._motion_lib = self._motion_train_lib
-            self._motion_lib.load_motions(
-                skeleton_trees=self.skeleton_trees,
-                gender_betas=self.humanoid_shapes.cpu(),
-                limb_weights=self.humanoid_limb_and_weights.cpu(),
-                random_sample=(not flags.test) and (not self.seq_motions),
-                max_len=-1 if flags.test else self.max_len,
+            def find_parent_dir(path, dir_name):
+                while path != os.path.dirname(path):
+                    if os.path.basename(path) == dir_name:
+                        return path
+                    path = os.path.dirname(path)
+                return None
+
+            proj_dir = find_parent_dir(
+                os.path.abspath(__file__), "PerpetualHumanoidControl"
             )
+            motion_lib_cfg = torch.load("data/theirs/motion_lib_cfg.pkl")
+            motion_lib_cfg["motion_file"] = (
+                f"{proj_dir}/../datasets/AMASS/amass_copycat_take5_train.pkl"
+            )
+            motion_lib: MotionLibSMPL = MotionLibSMPL(motion_lib_cfg)
+
+            self._motion_lib = motion_lib
+
+            load_motions_kwargs = torch.load("data/theirs/load_motions_kwargs.pkl")
+            load_motions_kwargs["start_idx"] = 4
+            self._motion_lib.load_motions(**load_motions_kwargs)
 
         else:
-            self._motion_lib = MotionLib(
-                motion_file=motion_train_file,
-                dof_body_ids=self._dof_body_ids,
-                dof_offsets=self._dof_offsets,
-                device=self.device,
-            )
+            raise NotImplementedError
+            # self._motion_lib = MotionLib(
+            #     motion_file=motion_train_file,
+            #     dof_body_ids=self._dof_body_ids,
+            #     dof_offsets=self._dof_offsets,
+            #     device=self.device,
+            # )
 
         return
 
@@ -551,11 +579,9 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
                 "trans": root_states_seg[:, :3],
                 "root_states_seg": root_states_seg,
                 "dof_pos": dof_pos_seg,
+                "fps": fps,
+                "betas": (self.humanoid_shapes[humanoid_index].detach().cpu().numpy()),
             }
-            motion_dump["fps"] = fps
-            motion_dump["betas"] = (
-                self.humanoid_shapes[humanoid_index].detach().cpu().numpy()
-            )
             motion_dump.update(
                 {
                     k: v[start:end, humanoid_index]
@@ -645,19 +671,20 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
         return obs_size
 
     def get_task_obs_size_detail(self):
-        task_obs_detail = OrderedDict()
-        task_obs_detail["target"] = self.get_task_obs_size()
-        task_obs_detail["fut_tracks"] = self._fut_tracks
-        task_obs_detail["num_traj_samples"] = self._num_traj_samples
-        task_obs_detail["obs_v"] = self.obs_v
-        task_obs_detail["track_bodies"] = self._track_bodies
-        task_obs_detail["models_path"] = self.models_path
+        task_obs_detail = {
+            "target": self.get_task_obs_size(),
+            "fut_tracks": self._fut_tracks,
+            "num_traj_samples": self._num_traj_samples,
+            "obs_v": self.obs_v,
+            "track_bodies": self._track_bodies,
+            "models_path": self.models_path,
+            "num_prim": self.cfg["env"].get("num_prim", 2),
+            "training_prim": self.cfg["env"].get("training_prim", 1),
+            "actors_to_load": self.cfg["env"].get("actors_to_load", 2),
+            "has_lateral": self.cfg["env"].get("has_lateral", True),
+        }
 
         # Dev
-        task_obs_detail["num_prim"] = self.cfg["env"].get("num_prim", 2)
-        task_obs_detail["training_prim"] = self.cfg["env"].get("training_prim", 1)
-        task_obs_detail["actors_to_load"] = self.cfg["env"].get("actors_to_load", 2)
-        task_obs_detail["has_lateral"] = self.cfg["env"].get("has_lateral", True)
 
         return task_obs_detail
 
@@ -784,6 +811,13 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
             self._marker_pos[..., self._track_bodies_id, :] = ref_rb_pos[
                 ..., self._track_bodies_id, :
             ]
+            t = self.progress_buf[0].item()
+            d = torch.load(self.cfg["in_3p_path"])
+            ref_rb_pos_subset = d["ref_rb_pos_subset"][None, t].float().cuda()
+            ref_rb_rot_subset = d["ref_rb_rot_subset"][None, t].float().cuda()
+            ref_body_vel_subset = d["ref_body_vel_subset"][None, t].float().cuda()
+            ref_body_ang_vel_subset = d["ref_body_ang_vel_subset"][None, t].float().cuda()
+            self._marker_pos[..., self._track_bodies_id, :] = ref_rb_pos_subset
 
             if self._occl_training:
                 self._marker_pos[self.random_occlu_idx] = 0
@@ -1059,6 +1093,13 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
         ref_body_vel_subset = ref_body_vel[..., self._track_bodies_id, :]
         ref_body_ang_vel_subset = ref_body_ang_vel[..., self._track_bodies_id, :]
 
+        t = self.progress_buf[0].item()
+        d = torch.load(self.cfg["in_3p_path"])
+        ref_rb_pos_subset = d["ref_rb_pos_subset"][None, t].float().cuda()
+        ref_rb_rot_subset = d["ref_rb_rot_subset"][None, t].float().cuda()
+        ref_body_vel_subset = d["ref_body_vel_subset"][None, t].float().cuda()
+        ref_body_ang_vel_subset = d["ref_body_ang_vel_subset"][None, t].float().cuda()
+
         if self.obs_v == 1:
             obs = compute_imitation_observations(
                 root_pos,
@@ -1176,6 +1217,25 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
                     time_steps,
                     self._has_upright_start,
                 )
+                # if os.path.exists("their_vr_input.pkl"):
+                #     their_vr_input = torch.load("their_vr_input.pkl")
+                # else:
+                # if t == 0:
+                #     self.their_vr_input = {
+                #         "ref_rb_pos_subset": torch.zeros(self._motion_lib.gts.shape[0], *ref_rb_pos_subset.shape[1:]),
+                #         "ref_rb_rot_subset": torch.zeros(self._motion_lib.gts.shape[0], *ref_rb_rot_subset.shape[1:]),
+                #         "ref_body_vel_subset": torch.zeros(self._motion_lib.gts.shape[0], *ref_body_vel_subset.shape[1:]),
+                #         "ref_body_ang_vel_subset": torch.zeros(self._motion_lib.gts.shape[0], *ref_body_ang_vel_subset.shape[1:]),
+                #     }
+                # self.their_vr_input["ref_rb_pos_subset"][t] = ref_rb_pos_subset[0]
+                # self.their_vr_input["ref_rb_rot_subset"][t] = ref_rb_rot_subset[0]
+                # self.their_vr_input["ref_body_vel_subset"][t] = ref_body_vel_subset[0]
+                # self.their_vr_input["ref_body_ang_vel_subset"][t] = ref_body_ang_vel_subset[0]
+                # print(t)
+                #
+                # if t >= 1679 * 2:
+                    # torch.save(self.their_vr_input, "their_vr_input.pkl")
+                    # raise RuntimeError
 
                 # obs[:, -1] = env_ids.clone().float(); print('debugging')
                 # obs[:, -2] = self.progress_buf[env_ids].clone().float(); print('debugging')
@@ -1287,7 +1347,6 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
                 self.ref_body_pos[env_ids] = ref_rb_pos[..., 0, :, :]
                 self.ref_body_vel[env_ids] = ref_body_vel[..., 0, :, :]
                 self.ref_body_rot[env_ids] = ref_rb_rot[..., 0, :, :]
-                self.ref_body_ang_vel[env_ids] = ref_body_ang_vel[..., 0, :, :]
                 self.ref_body_pos_subset[env_ids] = ref_rb_pos_subset[..., 0, :, :]
                 self.ref_dof_pos[env_ids] = ref_dof_pos[..., 0, :]
 
@@ -1295,7 +1354,6 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
                 self.ref_body_pos[env_ids] = ref_rb_pos
                 self.ref_body_vel[env_ids] = ref_body_vel
                 self.ref_body_rot[env_ids] = ref_rb_rot
-                self.ref_body_ang_vel[env_ids] = ref_body_ang_vel
                 self.ref_body_pos_subset[env_ids] = ref_rb_pos_subset
                 self.ref_dof_pos[env_ids] = ref_dof_pos
 
@@ -1469,7 +1527,7 @@ class HumanoidIm(humanoid_amp_task.HumanoidAMPTask):
             # env_ids_pick = env_ids
             env_ids_pick = env_ids[
                 torch.arange(env_ids.shape[0]).long()
-            ]  #  All far away start.
+            ]  # All far away start.
             max_distance = 5
             rand_distance = (
                 torch.sqrt(torch.rand(env_ids_pick.shape[0]).to(self.device))
@@ -1962,7 +2020,7 @@ def compute_imitation_observations(
     obs.append(diff_local_body_pos_flat.view(B, -1))  # 1 * 10 * 3 * 3
     obs.append(
         torch_utils.quat_to_tan_norm(diff_local_body_rot_flat).view(B, -1)
-    )  #  1 * 10 * 3 * 6
+    )  # 1 * 10 * 3 * 6
 
     ##### Velocities
     diff_global_vel = ref_body_vel.view(B, time_steps, J, 3) - body_vel.view(B, 1, J, 3)
@@ -2044,7 +2102,7 @@ def compute_imitation_observations_v2(
     obs.append(diff_local_body_pos_flat.view(B, -1))  # 1 * 10 * 3 * 3
     obs.append(
         torch_utils.quat_to_tan_norm(diff_local_body_rot_flat).view(B, -1)
-    )  #  1 * 10 * 3 * 6
+    )  # 1 * 10 * 3 * 6
 
     ##### Velocities
     diff_global_vel = ref_body_vel.view(B, time_steps, J, 3) - body_vel.view(B, 1, J, 3)
@@ -2127,7 +2185,7 @@ def compute_imitation_observations_v3(
     )  # Need to be change of basis
     obs.append(
         torch_utils.quat_to_tan_norm(diff_local_body_rot_flat).view(B, -1)
-    )  #  1 * 10 * 3 * 6
+    )  # 1 * 10 * 3 * 6
 
     obs = torch.cat(obs, dim=-1)
 
@@ -2223,7 +2281,7 @@ def compute_imitation_observations_v6(
     )  # 1 * timestep * 24 * 3
     obs.append(
         torch_utils.quat_to_tan_norm(diff_local_body_rot_flat).view(B, time_steps, -1)
-    )  #  1 * timestep * 24 * 6
+    )  # 1 * timestep * 24 * 6
     obs.append(diff_local_vel.view(B, time_steps, -1))  # timestep  * 24 * 3
     obs.append(diff_local_ang_vel.view(B, time_steps, -1))  # timestep  * 24 * 3
     obs.append(local_ref_body_pos.view(B, time_steps, -1))  # timestep  * 24 * 3
@@ -2344,7 +2402,7 @@ def compute_imitation_observations_v8(
     obs.append(diff_local_body_pos_flat.view(B, -1))  # 1 * 10 * J * 3
     obs.append(
         torch_utils.quat_to_tan_norm(diff_local_body_rot_flat).view(B, -1)
-    )  #  1 * 10 * J * 6
+    )  # 1 * 10 * J * 6
 
     ##### Velocity differences
     diff_global_vel = ref_body_vel.view(B, time_steps, J, 3)[:, 0:1] - body_vel.view(
@@ -2507,7 +2565,7 @@ def compute_imitation_observations_v9(
     obs.append(diff_local_body_pos_flat.view(B, time_steps, -1))  # 1 * 10 * 3 * 3
     obs.append(
         torch_utils.quat_to_tan_norm(diff_local_body_rot_flat).view(B, time_steps, -1)
-    )  #  1 * 10 * 3 * 6
+    )  # 1 * 10 * 3 * 6
     obs.append(diff_local_root_vel.view(B, time_steps, -1))  # 3 * 3
     obs.append(diff_local_root_ang_vel.view(B, time_steps, -1))  # 3 * 3
     obs.append(local_ref_body_pos.view(B, time_steps, -1))  # 24 * timestep * 3
