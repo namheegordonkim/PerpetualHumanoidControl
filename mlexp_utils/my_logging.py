@@ -3,14 +3,14 @@ import os
 import sys
 
 
-def get_logger(name: str):
+def get_logger(name: str, logdir: str):
     # Create a logger object
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
 
     # Create a file handler to write log messages to a file
-    log_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", f"log_{name}.txt"))
+    log_path = os.path.abspath(os.path.join(logdir, f"log_{name}.txt"))
     file_handler = logging.FileHandler(log_path)
     file_handler.setLevel(logging.DEBUG)
     stream_handler = logging.StreamHandler(sys.stdout)

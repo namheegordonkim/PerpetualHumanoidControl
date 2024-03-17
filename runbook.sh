@@ -30,4 +30,32 @@ python process.py --run_name asdf --in_name expert_canonical --out_name expert_p
 
 python look6.py --out_name asdf --in_posrot_path output/HumanoidIm/phc_prim/Humanoid_09-15-29-19/summaries/posrot_epoch_50.pth --debug_yes
 
-python phc/run_hydra.py learning=im_big exp_name=phc_prim env=env_im robot=smpl_humanoid env.motion_file=sample_data/amass_isaac_standing_upright_slim.pkl
+python phc/run_hydra4.py \
+learning=im_big \
+exp_name=phc_prim_vr \
+env=env_vr \
+robot=smpl_humanoid \
+env.motion_file=sample_data/amass_isaac_standing_upright_slim.pkl \
+no_log=True \
+env.num_envs=128
+
+python phc/run_hydra4.py \
+learning=im_big2 \
+exp_name=phc_pr \
+env=env_vr \
+robot=smpl_humanoid \
+env.motion_file=sample_data/amass_copycat_take5_train.pkl \
+no_log=True \
+env.num_envs=128
+
+python look7.py \
+--out_name asdf \
+--debug_yes
+
+python phc/run_hydra4.py learning=im_big2 exp_name=phc_prim_vr env=env_vr robot=smpl_humanoid env.motion_file=sample_data/amass_copycat_take5_train.pkl no_log=True env.num_envs=128 ++out_name=A01
+
+
+cmd=python phc/run_hydra4.py learning=im_big2 exp_name=phc_prim_vr env=env_vr robot=smpl_humanoid env.motion_file=sample_data/amass_copycat_take5_train.pkl no_log=True env.num_envs=128 ++out_name=A01
+module load singularity-wrapper && singularity_wrapper exec --mount type=bind,src="$(realpath .)",dst=/code --nv ./phc_latest.sif $cmd
+
+

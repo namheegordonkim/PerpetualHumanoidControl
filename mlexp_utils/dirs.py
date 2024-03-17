@@ -9,5 +9,6 @@ def find_parent_dir(path, dir_name):
     return None
 
 
-proj_dir = find_parent_dir(os.path.abspath(__file__), "PerpetualHumanoidControl")
+vendor_dir = find_parent_dir(os.path.abspath(__file__), "PerpetualHumanoidControl")
+proj_dir = find_parent_dir(os.path.abspath(__file__), "Beaty")
 src_dir = find_parent_dir(os.path.abspath(__file__), "src")

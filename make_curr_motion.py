@@ -8,7 +8,7 @@ from utils.motion_lib_base import compute_motion_dof_vels
 from argparse import ArgumentParser
 
 from mlexp_utils import my_logging
-from mlexp_utils.dirs import super_dir
+from mlexp_utils.dirs import proj_dir
 from poselib.poselib.skeleton.skeleton3d import (
     SkeletonState,
     SkeletonTree,
@@ -131,7 +131,7 @@ def main(args, remaining_args):
         imgs.append(img)
 
     w = imageio.get_writer(
-        f"{super_dir}/dump/movie.mp4",
+        f"{proj_dir}/dump/movie.mp4",
         format="FFMPEG",
         mode="I",
         fps=15,

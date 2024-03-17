@@ -32,6 +32,8 @@ import sys
 import pdb
 import os.path as osp
 
+from mlexp_utils.dirs import proj_dir
+
 sys.path.append(os.getcwd())
 from enum import Enum
 from matplotlib.pyplot import flag
@@ -138,7 +140,7 @@ class HumanoidAMP(Humanoid):
 
         self._amp_obs_demo_buf = None
 
-        data_dir = "data/smpl"
+        data_dir = f"{proj_dir}/data/phc/smpl"
         self.smpl_parser_n = SMPL_Parser(model_path=data_dir, gender="neutral").to(
             self.device
         )

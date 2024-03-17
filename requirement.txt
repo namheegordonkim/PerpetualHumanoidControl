@@ -21,7 +21,7 @@ lxml
 human_body_prior
 autograd
 scikit-learn
-chumpy
+git+https://github.com/mattloper/chumpy.git
 patchelf
 rl-games==1.1.4
 wandb
@@ -36,3 +36,6 @@ imageio-ffmpeg
 easydict
 open3d
 gdown
+rerun-sdk
+hydra-core
+pyvista

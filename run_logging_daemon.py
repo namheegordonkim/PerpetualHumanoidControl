@@ -1,4 +1,5 @@
 import os
+from argparse import ArgumentParser
 from collections import deque
 
 from inotify_simple import INotify, flags
@@ -7,7 +8,7 @@ from inotify_simple import INotify, flags
 def main():
     inotify = INotify()
     watch_flags = flags.CLOSE_WRITE
-    root_dir = 'output/HumanoidIm/phc_prim'
+    root_dir = 'output/HumanoidIm/phc_prim_vr'
 
     # recurse into all subdirectories, adding each into add_watch
     dir_queue = deque()
@@ -32,7 +33,8 @@ def main():
                 print('    ' + str(flag))
             if os.path.splitext(event.name)[1] == '.pkl':
                 in_posrot_path = os.path.join(wd_path_dict[event.wd], event.name)
-                os.system(f"python look6.py --out_name asdf --in_posrot_path {in_posrot_path} --debug_yes")
+                # os.system(f"python look6.py --out_name asdf --in_posrot_path {in_posrot_path} --debug_yes")
+                os.system(f"python look6.py --out_name asdf --in_posrot_path {in_posrot_path}")
 
 
 if __name__ == '__main__':
@@ -42,4 +44,4 @@ if __name__ == '__main__':
     #     "localhost", port=12346, stdoutToServer=True, stderrToServer=True, suspend=False
     # )
 
-    main()
+    main(args)

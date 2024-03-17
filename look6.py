@@ -1,3 +1,4 @@
+import os.path
 from argparse import ArgumentParser
 
 import imageio
@@ -43,7 +44,7 @@ def main(args, remaining_args):
     posrot = torch.load(args.in_posrot_path)
     rb_pos = posrot["rb_pos"]
     rb_rot = posrot["rb_rot"]
-    cumulative_r = np.sum(posrot["rewards"], axis=(-2, -1)).reshape(-1)
+    cumulative_r = np.mean(posrot["cumulative_rewards"], axis=(-1)).reshape(-1)
 
     rr.set_time_sequence("epoch", d["epoch"])
     rr.log(f"CumulativeReward", rr.Scalar(cumulative_r))
@@ -105,7 +106,9 @@ def main(args, remaining_args):
         rr.set_time_sequence("frame", i)
         rr.log(f"EvalVideo/{d['epoch']:06d}", rr.Image(img))
     plt.close()
-    rr.save(f"{proj_dir}/output/{d['exp_name']}_epoch{d['epoch']:06d}.rrd")
+    ddd = f"{proj_dir}/logdir/{d['out_name']}"
+    os.makedirs(ddd, exist_ok=True)
+    rr.save(f"{ddd}/epoch{d['epoch']:06d}.rrd")
     logger.info(f"Done")
 
 

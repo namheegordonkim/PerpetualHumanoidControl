@@ -37,6 +37,8 @@ from isaacgym import gymtorch
 from isaacgym import gymapi
 from isaacgym.torch_utils import *
 import joblib
+
+from mlexp_utils.dirs import proj_dir
 from phc.utils import torch_utils
 
 from uhc.smpllib.smpl_joint_names import SMPL_MUJOCO_NAMES, SMPLH_MUJOCO_NAMES
@@ -506,8 +508,9 @@ class Humanoid(BaseTask):
     def reset(self, env_ids=None):
         safe_reset = (env_ids is None) or len(env_ids) == self.num_envs
         if (env_ids is None):
-            env_ids = to_torch(np.arange(self.num_envs), device=self.device, dtype=torch.long)
-        
+            # env_ids = to_torch(np.arange(self.num_envs), device=self.device, dtype=torch.long)
+            env_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
+
         self._reset_envs(env_ids)
 
         if safe_reset:
@@ -701,10 +704,10 @@ class Humanoid(BaseTask):
 
     def _load_amass_gender_betas(self):
         if self._has_mesh:
-            gender_betas_data = joblib.load("sample_data/amass_isaac_gender_betas.pkl")
+            gender_betas_data = joblib.load(f"{proj_dir}/data/phc/sample_data/amass_isaac_gender_betas.pkl")
             self._amass_gender_betas = np.array(list(gender_betas_data.values()))
         else:
-            gender_betas_data = joblib.load("sample_data/amass_isaac_gender_betas_unique.pkl")
+            gender_betas_data = joblib.load(f"{proj_dir}/data/phc/sample_data/amass_isaac_gender_betas_unique.pkl")
             self._amass_gender_betas = np.array(gender_betas_data)
             
     def _create_envs(self, num_envs, spacing, num_per_row):

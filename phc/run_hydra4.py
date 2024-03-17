@@ -34,6 +34,9 @@ import time
 from gym import wrappers
 from tqdm import tqdm
 
+from mlexp_utils import my_logging
+from mlexp_utils.dirs import proj_dir
+
 sys.path.append(os.getcwd())
 
 from phc.utils.config import set_np_formatting, set_seed, SIM_TIMESTEP
@@ -70,8 +73,9 @@ from env.tasks import humanoid_amp_task
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from easydict import EasyDict
-import rerun as rr
 from learning.amp_network_builder import AMPBuilder
+
+from env.tasks.humanoid_amp import HumanoidAMP
 
 args = None
 cfg = None
@@ -144,9 +148,13 @@ class AdaptNet(nn.Module):
 
             mu = self.orig_a2c_network.mu_act(self.orig_a2c_network.mu(a_out))
             if self.orig_a2c_network.space_config["fixed_sigma"]:
-                sigma = mu * 0.0 + self.orig_a2c_network.sigma_act(self.orig_a2c_network.sigma)
+                sigma = mu * 0.0 + self.orig_a2c_network.sigma_act(
+                    self.orig_a2c_network.sigma
+                )
             else:
-                sigma = self.orig_a2c_network.sigma_act(self.orig_a2c_network.sigma(a_out))
+                sigma = self.orig_a2c_network.sigma_act(
+                    self.orig_a2c_network.sigma(a_out)
+                )
 
             return mu, sigma
 
@@ -156,7 +164,7 @@ class AdaptNet(nn.Module):
         return self.orig_a2c_network.load(params)
 
     def forward(self, obs_dict):
-        states = obs_dict.get('rnn_states', None)
+        states = obs_dict.get("rnn_states", None)
 
         actor_outputs = self.eval_actor(obs_dict)
         value_outputs = self.eval_critic(obs_dict)
@@ -360,7 +368,9 @@ class MyAgent(im_amp.IMAmpAgent):
         # d = torch_ext.load_checkpoint("data/theirs/Humanoid.pth")
         # self.model = MyAdaptNet(self.model)
         print("#################### Fitting and freezing!! ####################")
-        checkpoint = torch_ext.load_checkpoint("data/theirs/Humanoid.pth")
+        checkpoint = torch_ext.load_checkpoint(
+            f"{proj_dir}/data/phc/theirs/phc_prim_vr_Humanoid.pth"
+        )
 
         self.set_stats_weights(
             checkpoint
@@ -372,8 +382,9 @@ class MyAgent(im_amp.IMAmpAgent):
         # self.value_mean_std # not freezing value function though.
 
         # self.
-        print("hehe")
-        self.model.a2c_network = AdaptNet(self.model.a2c_network, 0)
+        if cfg["adaptnet_yes"]:
+            print("hehe")
+            self.model.a2c_network = AdaptNet(self.model.a2c_network, 0)
 
     def eval(self):
         print("Hello Eval")
@@ -391,6 +402,12 @@ class MyAgent(im_amp.IMAmpAgent):
         done_indices = torch.arange(
             self.num_actors, dtype=torch.int, device=self.device
         )
+
+        posrot_output_dir = osp.join(self.network_path, "posrot")
+        os.makedirs(osp.join(posrot_output_dir), exist_ok=True)
+        # posrot_output_file = osp.join(posrot_output_dir, "policy")
+        # _state_init = self.vec_env.env.task._state_init
+        # self.vec_env.env.task._state_init = HumanoidAMP.StateInit.Start
         with torch.no_grad():
             for n in tqdm(range(self.max_steps)):
                 obs_dict = self.env_reset(done_indices)
@@ -452,6 +469,7 @@ class MyAgent(im_amp.IMAmpAgent):
         d = {
             "epoch": self.epoch_num,
             "exp_name": self.exp_name,
+            "out_name": cfg["out_name"],
             "rb_pos": pos_stacked[[0]],
             "rb_rot": rot_stacked[[0]],
             "rb_vel": vel_stacked[[0]],
@@ -461,12 +479,13 @@ class MyAgent(im_amp.IMAmpAgent):
             "ref_rb_vel": ref_rb_vel_stacked[[0]],
             "ref_rb_ang": ref_rb_ang_stacked[[0]],
             "rewards": reward_stacked[[0]],
+            "cumulative_rewards": cumulative_rewards,
         }
-        # torch.save(d, cfg["out_posrot_path"])
         torch.save(
             d,
-            f"output/HumanoidIm/{self.exp_name}/posrot_epoch_{self.epoch_num:04d}.pkl",
+            f"{posrot_output_dir}/posrot_{self.epoch_num:06d}.pkl",
         )
+        # self.vec_env.task._state_init = _state_init
         return {}
 
     def train(self):
@@ -479,7 +498,9 @@ class MyAgent(im_amp.IMAmpAgent):
         self.obs = self.env_reset()
         self.curr_frames = self.batch_size_envs
 
-        model_output_file = osp.join(self.network_path, self.config["name"])
+        model_output_dir = osp.join(self.network_path, "policy")
+        os.makedirs(osp.join(model_output_dir), exist_ok=True)
+        model_output_file = osp.join(model_output_dir, "policy")
 
         if self.multi_gpu:
             self.hvd.setup_algo(self)
@@ -518,19 +539,26 @@ class MyAgent(im_amp.IMAmpAgent):
 
                 if self.save_freq > 0:
 
-                    if epoch_num == 1 or epoch_num % min(50, self.save_best_after) == 0:
-                        self.save(model_output_file)
-                        eval_info = self.eval()
-                        train_info_dict.update(eval_info)
-
-                    if (self._save_intermediate) and (
-                        epoch_num % (self.save_freq) == 0
+                    # if epoch_num == 1 or epoch_num % min(50, self.save_best_after) == 0:
+                    if epoch_num == 1 or (
+                        self._save_intermediate and (epoch_num % self.save_freq == 0)
                     ):
-                        # Save intermediate model every save_freq  epoches
+                        # self.save(model_output_file)
                         int_model_output_file = (
                             model_output_file + "_" + str(epoch_num).zfill(8)
                         )
                         self.save(int_model_output_file)
+                        eval_info = self.eval()
+                        train_info_dict.update(eval_info)
+
+                    # if (self._save_intermediate) and (
+                    #     epoch_num % (self.save_freq) == 0
+                    # ):
+                    #     # Save intermediate model every save_freq  epoches
+                    #     int_model_output_file = (
+                    #         model_output_file + "_" + str(epoch_num).zfill(8)
+                    #     )
+                    #     self.save(int_model_output_file)
 
                 if self.game_rewards.current_size > 0:
                     mean_rewards = self._get_mean_rewards()
@@ -875,9 +903,22 @@ def main(cfg_hydra: DictConfig) -> None:
     global cfg
 
     cfg = EasyDict(OmegaConf.to_container(cfg_hydra, resolve=True))
-    rr.init("test", spawn=False)
 
+    if cfg["debug_yes"]:
+        import pydevd_pycharm
+
+        pydevd_pycharm.settrace(
+            "localhost",
+            port=12346,
+            stdoutToServer=True,
+            stderrToServer=True,
+            suspend=False,
+        )
     set_np_formatting()
+    logger = my_logging.get_logger(f"{cfg['out_name']}", cfg["log_dir"])
+    logger.info(f"Starting")
+
+    logger.info(f"{cfg}")
 
     # cfg, cfg_train, logdir = load_cfg(args)
     (
@@ -945,8 +986,8 @@ def main(cfg_hydra: DictConfig) -> None:
 
     # Create default directories for weights and statistics
     cfg_train = cfg.learning
-    cfg_train["params"]["config"]["network_path"] = cfg.output_path
-    cfg_train["params"]["config"]["train_dir"] = cfg.output_path
+    cfg_train["params"]["config"]["network_path"] = cfg["out_dir"]
+    cfg_train["params"]["config"]["train_dir"] = cfg["out_dir"]
     cfg_train["params"]["config"]["num_actors"] = cfg.env.num_envs
 
     if cfg.epoch > 0:
@@ -978,10 +1019,4 @@ def main(cfg_hydra: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    import pydevd_pycharm
-
-    pydevd_pycharm.settrace(
-        "localhost", port=12346, stdoutToServer=True, stderrToServer=True, suspend=False
-    )
-
     main()
